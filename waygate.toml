@@ -1,0 +1,5 @@
+host = "127.0.0.1"
+port = 10901
+verify_certificate = false
+client_secret_key = "j+7K1pfsAE1W82FCRyJbs65BHInOQ+xN9qog0sjDpTM="
+server_public_key = "KUdoBOUIdx1mmn9oOpFggrGUgTb3ljoO3l+R4tyYpUo="
