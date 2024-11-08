@@ -54,10 +54,12 @@ const P2P_DISCONNECT_PATTERN: &[Atom] =
 const SODIUM_KX_KEY_DERIVE_PATTERN: &[Atom] =
     pelite::pattern!("? 53 ? 83 EC 50 ? 8B 05 ? ? ? ? ? 33 C4 ? 89 44 ? ? ? 8B C0 ? 8B D9 ? 8B C2 ? 8D 4C ? 20 ? 8B D0");
 
-pub fn init() {
-    std::panic::set_hook(Box::new(panic_hook));
-    let appender = tracing_appender::rolling::never("./", "waygate-client.log");
-    tracing_subscriber::fmt().with_writer(appender).init();
+pub fn init(config: Option<Config>) {
+    let config = Arc::new(
+        config
+            .or_else(|| config::read_config_file())
+            .unwrap_or_default(),
+    );
 
     // Who the fuck are we
     let module = unsafe {
@@ -73,7 +75,6 @@ pub fn init() {
     tracing::info!("Set EAC hooks");
 
     // Set the server redirect and set up the key derivation hook
-    let config = Arc::new(config::read_config_file().unwrap_or_default());
     setup_cryptography(&module, config.clone()).expect("Could not set up sodium hooks");
     setup_winhttp(config.clone()).expect("Could not set up WinHTTP hooks");
 
@@ -94,7 +95,11 @@ pub fn init() {
 pub unsafe extern "C" fn DllMain(_hmodule: usize, reason: u32) -> bool {
     match reason {
         1 => {
-            init();
+            std::panic::set_hook(Box::new(panic_hook));
+            let appender = tracing_appender::rolling::never("./", "waygate-client.log");
+            tracing_subscriber::fmt().with_writer(appender).init();
+
+            init(None);
             true
         }
 
