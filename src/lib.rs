@@ -13,7 +13,7 @@ use std::{
     ffi::c_void, mem::transmute, ptr::copy_nonoverlapping, sync::Arc, thread::spawn, time::Duration,
 };
 
-use config::Config;
+pub use config::Config;
 use p2p::{Message, PlayerNetworking, SteamMessageTransport};
 use pelite::{
     pattern::Atom,
