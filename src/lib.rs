@@ -9,7 +9,9 @@ mod steam;
 mod singleton;
 mod task;
 
-use std::{ffi::c_void, mem::transmute, ptr::copy_nonoverlapping, sync::Arc, thread::spawn, time::Duration};
+use std::{
+    ffi::c_void, mem::transmute, ptr::copy_nonoverlapping, sync::Arc, thread::spawn, time::Duration,
+};
 
 use config::Config;
 use p2p::{Message, PlayerNetworking, SteamMessageTransport};
@@ -23,12 +25,12 @@ use steamworks::{Client, SteamId};
 use task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
 use thiserror::Error;
 use tracing_panic::panic_hook;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::{
     core::{PCSTR, PCWSTR},
     s,
     Win32::Networking::WinHttp::WinHttpAddRequestHeaders,
 };
-use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 
 #[cfg(feature = "eldenring")]
 const APP_ID: u32 = 1245620;
@@ -52,41 +54,46 @@ const P2P_DISCONNECT_PATTERN: &[Atom] =
 const SODIUM_KX_KEY_DERIVE_PATTERN: &[Atom] =
     pelite::pattern!("? 53 ? 83 EC 50 ? 8B 05 ? ? ? ? ? 33 C4 ? 89 44 ? ? ? 8B C0 ? 8B D9 ? 8B C2 ? 8D 4C ? 20 ? 8B D0");
 
+pub fn init() {
+    std::panic::set_hook(Box::new(panic_hook));
+    let appender = tracing_appender::rolling::never("./", "waygate-client.log");
+    tracing_subscriber::fmt().with_writer(appender).init();
+
+    // Who the fuck are we
+    let module = unsafe {
+        let handle = GetModuleHandleA(PCSTR(std::ptr::null())).unwrap().0 as *const u8;
+        PeView::module(handle)
+    };
+
+    // Disable EAC but trick the game into thinking it is running so that we can connect to
+    // a server.
+    unsafe {
+        eac::set_hooks();
+    }
+    tracing::info!("Set EAC hooks");
+
+    // Set the server redirect and set up the key derivation hook
+    let config = Arc::new(config::read_config_file().unwrap_or_default());
+    setup_cryptography(&module, config.clone()).expect("Could not set up sodium hooks");
+    setup_winhttp(config.clone()).expect("Could not set up WinHTTP hooks");
+
+    // Spin up thread to wait for CSTaskImp to be initialized, then register a
+    // task for our own message pump, such that it runs in lock-step with the
+    // game's packet poll.
+    spawn(move || {
+        // TODO: waiting for 5s is a race condition, need to actually await CSTask
+        std::thread::sleep(Duration::from_secs(5));
+
+        // Set up the p2p swap
+        setup_p2p(&module).expect("Could not set up p2p swap");
+    });
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn DllMain(_hmodule: usize, reason: u32) -> bool {
     match reason {
         1 => {
-            std::panic::set_hook(Box::new(panic_hook));
-            let appender = tracing_appender::rolling::never("./", "waygate-client.log");
-            tracing_subscriber::fmt().with_writer(appender).init();
-
-            // Who the fuck are we
-            let module = unsafe {
-                let handle = GetModuleHandleA(PCSTR(std::ptr::null())).unwrap().0 as *const u8;
-                PeView::module(handle)
-            };
-
-            // Disable EAC but trick the game into thinking it is running so that we can connect to
-            // a server.
-            eac::set_hooks();
-            tracing::info!("Set EAC hooks");
-
-            // Set the server redirect and set up the key derivation hook
-            let config = Arc::new(config::read_config_file().unwrap_or_default());
-            setup_cryptography(&module, config.clone()).expect("Could not set up sodium hooks");
-            setup_winhttp(config.clone()).expect("Could not set up WinHTTP hooks");
-
-            // Spin up thread to wait for CSTaskImp to be initialized, then register a
-            // task for our own message pump, such that it runs in lock-step with the
-            // game's packet poll.
-            spawn(move || {
-                // TODO: waiting for 5s is a race condition, need to actually await CSTask
-                std::thread::sleep(Duration::from_secs(5));
-
-                // Set up the p2p swap
-                setup_p2p(&module).expect("Could not set up p2p swap");
-            });
-
+            init();
             true
         }
 
