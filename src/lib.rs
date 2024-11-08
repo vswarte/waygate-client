@@ -90,6 +90,7 @@ pub fn init() {
 }
 
 #[no_mangle]
+#[cfg(not(feature = "lib"))]
 pub unsafe extern "C" fn DllMain(_hmodule: usize, reason: u32) -> bool {
     match reason {
         1 => {
