@@ -54,12 +54,8 @@ const P2P_DISCONNECT_PATTERN: &[Atom] =
 const SODIUM_KX_KEY_DERIVE_PATTERN: &[Atom] =
     pelite::pattern!("? 53 ? 83 EC 50 ? 8B 05 ? ? ? ? ? 33 C4 ? 89 44 ? ? ? 8B C0 ? 8B D9 ? 8B C2 ? 8D 4C ? 20 ? 8B D0");
 
-pub fn init(config: Option<Config>) {
-    let config = Arc::new(
-        config
-            .or_else(|| config::read_config_file())
-            .unwrap_or_default(),
-    );
+pub fn init(config: Config) {
+    let config = Arc::new(config);
 
     // Who the fuck are we
     let module = unsafe {
@@ -99,7 +95,8 @@ pub unsafe extern "C" fn DllMain(_hmodule: usize, reason: u32) -> bool {
             let appender = tracing_appender::rolling::never("./", "waygate-client.log");
             tracing_subscriber::fmt().with_writer(appender).init();
 
-            init(None);
+            let config = config::read_config_file().unwrap_or_default();
+            init(config);
             true
         }
 
