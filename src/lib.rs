@@ -1,6 +1,6 @@
 #![recursion_limit = "10000"]
 
-mod config;
+pub mod config;
 mod eac;
 mod p2p;
 // mod player_limit;
