@@ -4,7 +4,7 @@ edition = "2021"
 version = "0.0.1"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "lib"]
 
 [profile.release]
 strip = true
@@ -59,3 +59,4 @@ default = ["eldenring", "p2p"]
 eldenring = []
 armoredcore6 = []
 p2p = []
+lib = []
