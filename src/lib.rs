@@ -21,6 +21,7 @@ use pelite::{
 };
 use retour::static_detour;
 use singleton::get_instance;
+use steamhook::singleton::RwSingleton;
 use steamworks::{Client, SteamId};
 use task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
 use thiserror::Error;
@@ -54,7 +55,7 @@ const P2P_DISCONNECT_PATTERN: &[Atom] =
 const SODIUM_KX_KEY_DERIVE_PATTERN: &[Atom] =
     pelite::pattern!("? 53 ? 83 EC 50 ? 8B 05 ? ? ? ? ? 33 C4 ? 89 44 ? ? ? 8B C0 ? 8B D9 ? 8B C2 ? 8D 4C ? 20 ? 8B D0");
 
-pub fn init(config: Config) {
+pub unsafe fn init(config: Config) {
     let config = Arc::new(config);
 
     // Who the fuck are we
@@ -65,18 +66,18 @@ pub fn init(config: Config) {
 
     // Disable EAC but trick the game into thinking it is running so that we can connect to
     // a server.
-    unsafe {
-        eac::set_hooks();
-    }
+    eac::set_hooks();
     tracing::info!("Set EAC hooks");
 
     // Set the server redirect and set up the key derivation hook
+    let config = Arc::new(config::read_config_file().unwrap_or_default());
     setup_cryptography(&module, config.clone()).expect("Could not set up sodium hooks");
     setup_winhttp(config.clone()).expect("Could not set up WinHTTP hooks");
 
     // Spin up thread to wait for CSTaskImp to be initialized, then register a
     // task for our own message pump, such that it runs in lock-step with the
     // game's packet poll.
+    #[cfg(feature = "eldenring")]
     spawn(move || {
         // TODO: waiting for 5s is a race condition, need to actually await CSTask
         std::thread::sleep(Duration::from_secs(5));
@@ -95,8 +96,7 @@ pub unsafe extern "C" fn DllMain(_hmodule: usize, reason: u32) -> bool {
             let appender = tracing_appender::rolling::never("./", "waygate-client.log");
             tracing_subscriber::fmt().with_writer(appender).init();
 
-            let config = config::read_config_file().unwrap_or_default();
-            init(config);
+            init(config::read_config_file().unwrap_or_default());
             true
         }
 

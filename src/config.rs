@@ -17,7 +17,6 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        // Connect to bingustan by default
         Config {
             host: "212.227.51.78".to_string(),
             port: 10901,

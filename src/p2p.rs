@@ -105,19 +105,10 @@ impl<T: MessageTransport> PlayerNetworking<T> {
                     }
 
                     match message {
-                        Ok(message) => {
-                            // Ensure we're not handling anything for a recently disconnected player
-                            if let Err(e) = self.handle_message(remote, message) {
-                                tracing::error!(
-                                    "Could not handle message from {remote:?}. e = {e}"
-                                );
-                            }
+                        Ok(message) => if let Err(e) = self.handle_message(remote, message) {
+                            tracing::error!("Could not handle message from {remote:?}. e = {e}");
                         }
-                        Err(e) => {
-                            tracing::error!(
-                                "Could not deserialize message from {remote:?}. e = {e}"
-                            )
-                        }
+                        Err(e) => tracing::error!("Could not deserialize message from {remote:?}. e = {e}"),
                     }
                 }
                 Err(e) => tracing::error!("Could not figure out remote. e = {e}"),
