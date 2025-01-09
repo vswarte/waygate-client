@@ -8,6 +8,7 @@ mod steam;
 
 mod singleton;
 mod task;
+mod monitor;
 
 use std::{
     ffi::c_void, mem::transmute, ptr::copy_nonoverlapping, sync::Arc, thread::spawn, time::Duration,
@@ -77,7 +78,6 @@ pub unsafe fn init(config: Config) {
     // Spin up thread to wait for CSTaskImp to be initialized, then register a
     // task for our own message pump, such that it runs in lock-step with the
     // game's packet poll.
-    #[cfg(feature = "eldenring")]
     spawn(move || {
         // TODO: waiting for 5s is a race condition, need to actually await CSTask
         std::thread::sleep(Duration::from_secs(5));
@@ -90,18 +90,15 @@ pub unsafe fn init(config: Config) {
 #[no_mangle]
 #[cfg(not(feature = "lib"))]
 pub unsafe extern "C" fn DllMain(_hmodule: usize, reason: u32) -> bool {
-    match reason {
-        1 => {
-            std::panic::set_hook(Box::new(panic_hook));
-            let appender = tracing_appender::rolling::never("./", "waygate-client.log");
-            tracing_subscriber::fmt().with_writer(appender).init();
+    if reason == 1 {
+        std::panic::set_hook(Box::new(panic_hook));
+        let appender = tracing_appender::rolling::never("./", "waygate-client.log");
+        tracing_subscriber::fmt().with_writer(appender).init();
 
-            init(config::read_config_file().unwrap_or_default());
-            true
-        }
-
-        _ => true,
+        init(config::read_config_file().unwrap_or_default());
     }
+
+    true
 }
 
 #[derive(Debug, Error)]
@@ -328,6 +325,10 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
             .map_err(InitError::AddressConversion)?
     };
 
+    tracing::info!("Packet Dequeue: {packet_dequeue_va:x?}");
+    tracing::info!("Packet Send: {packet_send_va:x?}");
+    tracing::info!("Disconnect: {disconnect_va:x?}");
+
     unsafe {
         let player_networking = player_networking.clone();
 
@@ -342,6 +343,12 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
                       output: *mut u8,
                       max_size: u32,
                       control_byte: *mut u8| {
+
+                    #[cfg(feature="armoredcore6")]
+                    if packet_type == 84 || packet_type == 250 {
+                        return P2P_PACKET_DEQUEUE.call(connection, packet_type, output, max_size, control_byte);
+                    }
+
                     let connection = connection.as_ref().unwrap();
                     let remote = connection.steam_id();
                     let packet = match player_networking.dequeue_game_packet(&remote, packet_type) {
@@ -365,7 +372,12 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
                         *control_byte = u8::MAX;
                     }
 
-                    packet.len() as u32
+                    let result = packet.len() as u32;
+                    if result != 0 {
+                        // tracing::info!("Received packet {packet_type} -> {}", result);
+                    }
+
+                    result
                 },
             )?
             .enable()?;
@@ -379,13 +391,21 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
         P2P_PACKET_SEND
             .initialize(
                 transmute(packet_send_va),
-                move |_: usize,
-                      _: usize,
+                move |p1: usize,
+                      p2: usize,
                       steam_id: *const u64,
                       packet_type: u8,
                       buffer: *const u8,
                       packet_size: u32,
-                      _: u8| {
+                      p7: u8| {
+                    // tracing::info!("Sending packet {packet_type} -> {packet_size}");
+
+                    #[cfg(feature="armoredcore6")]
+                    if packet_type == 84 || packet_type == 250 {
+                        return P2P_PACKET_SEND.call(p1, p2, steam_id, packet_type, buffer, packet_size, p7);
+                    }
+
+
                     let remote = SteamId::from_raw(*(steam_id.as_ref().unwrap()));
                     let contents = std::slice::from_raw_parts(buffer, packet_size as usize);
 

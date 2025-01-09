@@ -30,6 +30,12 @@ log-panics = { version = "2", features = ["with-backtrace"] }
 base64 = "0.22"
 pelite = "0.10"
 bincode = "1"
+eframe = { version = "0.29", default-features = false, features = ["default"] }
+egui_plot = "0.29"
+rfd = "0.15.1"
+image = { version = "0.25", features = ["png"] }
+sysinfo = "0.31"
+dll-syringe = { version = "0.15", features = ["rpc-payload", "payload-utils"]}
 
 [dependencies.steamhook]
 git = "https://github.com/tremwil/steamhook.git"
@@ -54,11 +60,14 @@ features = [
     "Win32_System_LibraryLoader",
 ]
 
+[dependencies.monitor-ipc]
+path = "./monitor-ipc"
+
 [patch.crates-io]
 libudis86-sys = { git = 'https://github.com/vars1ty/libudis86-sys.git' }
 
 [features]
-default = ["eldenring", "p2p"]
+default = ["eldenring"]
 eldenring = []
 armoredcore6 = []
 p2p = []

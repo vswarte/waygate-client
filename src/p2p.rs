@@ -128,6 +128,7 @@ impl<T: MessageTransport> PlayerNetworking<T> {
         // TODO: We can save on some locking here
         // TODO: add time-out to prevent handling packets of recently or about to be
         // disconnected players.
+        // tracing::info!("Received message {message:?}");
 
         // Create player session entry if the player hasn't recently disconnected and doesn't exist
         // yet in our session map.
@@ -142,15 +143,14 @@ impl<T: MessageTransport> PlayerNetworking<T> {
                 // Drop the guard to prevent deadlocking here
                 drop(read_guard);
 
-                // Relock the session map since the player entry might have been
-                // added by another thread since we released the read lock.
+                let session = PlayerNetworkingSession::new();
                 if let Entry::Vacant(v) = self
                     .sessions
                     .write()
                     .map_err(|_| PlayerNetworkingError::SessionMapPoison)?
                     .entry(*remote)
                 {
-                    v.insert(PlayerNetworkingSession::new());
+                    v.insert(session);
                 }
             }
         }
@@ -272,6 +272,7 @@ impl Message {
     pub fn send_flags(&self) -> SendFlags {
         match self {
             // TODO: figure out more packet types and determine appropriate send flags.
+            #[cfg(feature="eldenring")]
             Message::Packet(packet_type, _) => match packet_type {
                 1 => SendFlags::UNRELIABLE_NO_NAGLE,
                 4 => SendFlags::UNRELIABLE_NO_NAGLE,
@@ -299,6 +300,13 @@ impl Message {
                 107 => SendFlags::RELIABLE,
                 112 => SendFlags::UNRELIABLE_NO_NAGLE,
                 250 => SendFlags::RELIABLE,
+                _ => SendFlags::RELIABLE,
+            },
+
+            #[cfg(feature="armoredcore6")]
+            Message::Packet(packet_type, _) => match packet_type {
+                1 => SendFlags::UNRELIABLE_NO_NAGLE,
+                23 => SendFlags::UNRELIABLE_NO_NAGLE,
                 _ => SendFlags::RELIABLE,
             },
 
