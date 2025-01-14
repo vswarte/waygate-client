@@ -70,7 +70,6 @@ pub unsafe fn init(config: Config) {
     tracing::info!("Set EAC hooks");
 
     // Set the server redirect and set up the key derivation hook
-    let config = Arc::new(config::read_config_file().unwrap_or_default());
     setup_cryptography(&module, config.clone()).expect("Could not set up sodium hooks");
     setup_winhttp(config.clone()).expect("Could not set up WinHTTP hooks");
 
