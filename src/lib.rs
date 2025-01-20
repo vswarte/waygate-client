@@ -21,17 +21,18 @@ use pelite::{
 };
 use retour::static_detour;
 use singleton::get_instance;
-use steamhook::singleton::RwSingleton;
 use steamworks::{Client, SteamId};
 use task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
 use thiserror::Error;
-use tracing_panic::panic_hook;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::{
     core::{PCSTR, PCWSTR},
     s,
     Win32::Networking::WinHttp::WinHttpAddRequestHeaders,
 };
+
+#[cfg(not(feature = "lib"))]
+use tracing_panic::panic_hook;
 
 #[cfg(feature = "eldenring")]
 const APP_ID: u32 = 1245620;

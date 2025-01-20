@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
-const PROBE_INTERVAL: Duration = Duration::from_secs(2);
+// const PROBE_INTERVAL: Duration = Duration::from_secs(2);
 
-pub type LatencySequence = u8; 
+pub type LatencySequence = u8;
 
 /// Tracks latency for a particular p2p connection. This is done by sending a ping and awaiting a
 /// pong, then taking the duration and dividing it in two. This measuring is crude and later down
@@ -35,12 +35,12 @@ impl LatencyTracker {
         // Disable until I build the stats RPC
         return false;
 
-        match self.sent_at {
-            Some(sent_at) => Instant::now()
-                .duration_since(sent_at) > PROBE_INTERVAL,
+        // match self.sent_at {
+        //     Some(sent_at) => Instant::now()
+        //         .duration_since(sent_at) > PROBE_INTERVAL,
 
-            None => true,
-        }
+        //     None => true,
+        // }
     }
 
     /// Starts timing a probe and returns the sequence for the probe.

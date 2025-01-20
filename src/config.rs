@@ -1,10 +1,12 @@
-use std::fs;
-use std::path;
+
 use serde::Deserialize;
 
 use base64::prelude::*;
 
-const CONFIG_FILE: &str = "./waygate.toml";
+#[cfg(not(feature = "lib"))]
+use std::fs;
+#[cfg(not(feature = "lib"))]
+use std::path;
 
 #[derive(Clone, Deserialize)]
 pub struct Config {
@@ -37,6 +39,11 @@ impl Config {
     }
 }
 
+
+#[cfg(not(feature = "lib"))]
+const CONFIG_FILE: &str = "./waygate.toml";
+
+#[cfg(not(feature = "lib"))]
 pub(crate) fn read_config_file() -> Option<Config> {
     path::absolute(path::PathBuf::from(CONFIG_FILE))
         .map(|p| fs::read_to_string(p).ok()).ok()
