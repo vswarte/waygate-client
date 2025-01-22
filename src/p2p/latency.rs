@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-// const PROBE_INTERVAL: Duration = Duration::from_secs(2);
+const PROBE_INTERVAL: Duration = Duration::from_secs(2);
 
 pub type LatencySequence = u8;
 
@@ -35,12 +35,13 @@ impl LatencyTracker {
         // Disable until I build the stats RPC
         return false;
 
-        // match self.sent_at {
-        //     Some(sent_at) => Instant::now()
-        //         .duration_since(sent_at) > PROBE_INTERVAL,
+        #[allow(unreachable_code)]
+        match self.sent_at {
+            Some(sent_at) => Instant::now()
+                .duration_since(sent_at) > PROBE_INTERVAL,
 
-        //     None => true,
-        // }
+            None => true,
+        }
     }
 
     /// Starts timing a probe and returns the sequence for the probe.
