@@ -362,7 +362,7 @@ impl MessageTransport for SteamMessageTransport {
 
         self.client.networking_messages().send_message_to_user(
             identity,
-            message.send_flags(),
+            message.send_flags() | SendFlags::AUTO_RESTART_BROKEN_SESSION,
             &data,
             self.messages_channel,
         )?;
