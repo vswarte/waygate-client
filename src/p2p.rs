@@ -68,24 +68,24 @@ impl<T: MessageTransport> PlayerNetworking<T> {
     /// Updates the PlayerNetworking structure, sends out any latency probes, pumps and handles the
     /// received messages and pushes inbound game packets to their respective queues.
     pub fn update(&self) -> Result<(), PlayerNetworkingError<T>> {
-        for (remote, session) in self
-            .sessions
-            .read()
-            .map_err(|_| PlayerNetworkingError::SessionMapPoison)?
-            .iter()
-        {
-            let mut tracker = session
-                .latency
-                .write()
-                .map_err(|_| PlayerNetworkingError::LatencyTrackerPoison)?;
+        // for (remote, session) in self
+        //     .sessions
+        //     .read()
+        //     .map_err(|_| PlayerNetworkingError::SessionMapPoison)?
+        //     .iter()
+        // {
+        //     let mut tracker = session
+        //         .latency
+        //         .write()
+        //         .map_err(|_| PlayerNetworkingError::LatencyTrackerPoison)?;
 
-            if tracker.should_send_probe() {
-                let seq = tracker.start_probe();
-                if let Err(e) = self.transport.send(remote, &Message::LatencyPing(seq)) {
-                    tracing::error!("Could not send latency probe to other player. e = {e}");
-                }
-            }
-        }
+        //     if tracker.should_send_probe() {
+        //         let seq = tracker.start_probe();
+        //         if let Err(e) = self.transport.send(remote, &Message::LatencyPing(seq)) {
+        //             tracing::error!("Could not send latency probe to other player. e = {e}");
+        //         }
+        //     }
+        // }
 
         // Pump incoming messages
         for message in self.transport.receive().iter() {
@@ -172,17 +172,18 @@ impl<T: MessageTransport> PlayerNetworking<T> {
                 }
 
                 // Reply to a ping with a pong.
-                Message::LatencyPing(seq) => self
-                    .transport
-                    .send(remote, &Message::LatencyPong(*seq))
-                    .unwrap(),
+                // Message::LatencyPing(seq) => self
+                //     .transport
+                //     .send(remote, &Message::LatencyPong(*seq))
+                //     .unwrap(),
 
                 // Update local stats for the session when a pong comes back
-                Message::LatencyPong(seq) => session
-                    .latency
-                    .write()
-                    .map_err(|_| PlayerNetworkingError::LatencyTracking)?
-                    .end_probe(*seq),
+                // Message::LatencyPong(seq) => session
+                //     .latency
+                //     .write()
+                //     .map_err(|_| PlayerNetworkingError::LatencyTracking)?
+                //     .end_probe(*seq),
+                _ => {}
             }
         } else {
             tracing::error!(

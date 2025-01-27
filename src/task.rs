@@ -97,14 +97,14 @@ pub struct FD4Task {
 impl FD4TaskVMT for FD4Task {
     extern "C" fn execute(&mut self, data: &FD4TaskData) {
         // Should we stop before run?
-        if !self.unregister_requested.load(Ordering::Relaxed) {
+        // if !self.unregister_requested.load(Ordering::Relaxed) {
             (self.closure)(data);
-        }
+        // }
 
         // Drop if we got cancelled during run.
-        if self.unregister_requested.load(Ordering::Relaxed) {
-            self.self_ref.get_mut().take();
-        }
+        // if self.unregister_requested.load(Ordering::Relaxed) {
+        //     self.self_ref.get_mut().take();
+        // }
     }
 }
 
