@@ -1,5 +1,3 @@
-mod latency;
-
 use std::{
     collections::{hash_map::Entry, HashMap},
     sync::RwLock,
@@ -7,18 +5,18 @@ use std::{
 };
 
 use crossbeam::queue::ArrayQueue;
-use latency::{LatencySequence, LatencyTracker};
 use serde::{Deserialize, Serialize};
-use steamworks::{
-    networking_types::{NetworkingIdentity, SendFlags},
-    Client, ClientManager,
-};
+use steamworks::{Client, ClientManager};
 use steamworks_sys::{
-    k_nSteamNetworkingSend_AutoRestartBrokenSession, k_nSteamNetworkingSend_Reliable, k_nSteamNetworkingSend_UnreliableNoNagle, ESteamNetworkingIdentityType, SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser, SteamAPI_ISteamNetworkingMessages_SendMessageToUser, SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamAPI_SteamNetworking_v006, SteamNetworkingIdentity, SteamNetworkingIdentity__bindgen_ty_2
+    k_nSteamNetworkingSend_AutoRestartBrokenSession, k_nSteamNetworkingSend_Reliable,
+    k_nSteamNetworkingSend_UnreliableNoNagle,
+    SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser,
+    SteamAPI_ISteamNetworkingMessages_SendMessageToUser,
+    SteamAPI_SteamNetworkingMessages_SteamAPI_v002,
 };
 use thiserror::Error;
 
-use crate::steam::networking_identity;
+use crate::steam::{is_blocked, networking_identity};
 
 /// Determines the capacity of a packet queue. The client DLL will crash if this capacity is ever
 /// exceeced.
@@ -28,7 +26,8 @@ const PACKET_QUEUE_CAPACITY: usize = 2048;
 const PACKET_BATCH_SIZE: usize = 0x20;
 /// Amount of time to ignore traffic from a disconnected party for. This ensures that we're not
 /// handling stale events causing reinsertion of the session into the session map.
-const DISCONNECT_IGNORE_TIMEOUT: Duration = Duration::from_secs(2);
+const DISCONNECT_IGNORE_TIMEOUT: Duration = Duration::from_secs(5);
+const BLOCKED_IGNORE_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Error)]
 pub enum PlayerNetworkingError<T: MessageTransport> {
@@ -36,14 +35,10 @@ pub enum PlayerNetworkingError<T: MessageTransport> {
     SessionMapPoison,
     #[error("Disconnect map lock poisoned")]
     DisconnectMapPoison,
-    #[error("Latency tracker lock poisoned")]
-    LatencyTrackerPoison,
     #[error("Player packet queue has reached its bounds. packet_type = {0}")]
     PacketQueueBounds(u8),
     #[error("Transport error. {0}")]
     Transport(T::TransportError),
-    #[error("Latency tracking error.")]
-    LatencyTracking,
     #[error("Unknown lobby participant")]
     UnknownParticipant,
 }
@@ -75,42 +70,15 @@ impl<T: MessageTransport> PlayerNetworking<T> {
         }
     }
 
-    /// Updates the PlayerNetworking structure, sends out any latency probes, pumps and handles the
+    /// Updates the PlayerNetworking structure, pumps and handles the
     /// received messages and pushes inbound game packets to their respective queues.
     pub fn update(&self) -> Result<(), PlayerNetworkingError<T>> {
-        // for (remote, session) in self
-        //     .sessions
-        //     .read()
-        //     .map_err(|_| PlayerNetworkingError::SessionMapPoison)?
-        //     .iter()
-        // {
-        //     let mut tracker = session
-        //         .latency
-        //         .write()
-        //         .map_err(|_| PlayerNetworkingError::LatencyTrackerPoison)?;
-
-        //     if tracker.should_send_probe() {
-        //         let seq = tracker.start_probe();
-        //         if let Err(e) = self.transport.send(remote, &Message::LatencyPing(seq)) {
-        //             tracing::error!("Could not send latency probe to other player. e = {e}");
-        //         }
-        //     }
-        // }
-
         // Pump incoming messages
         for message in self.transport.receive().iter() {
             match message {
                 Ok((remote, message)) => {
-                    if self
-                        .disconnects
-                        .read()
-                        .map_err(|_| PlayerNetworkingError::DisconnectMapPoison)?
-                        .get(remote)
-                        .is_some_and(|i| {
-                            Instant::now().duration_since(*i) < DISCONNECT_IGNORE_TIMEOUT
-                        })
-                    {
-                        tracing::info!("Received data from disconnected remote. Ignoring.");
+                    if self.remote_in_cooldown(*remote) {
+                        tracing::debug!("Received data from disconnected remote. Ignoring.");
                         continue;
                     }
 
@@ -135,16 +103,13 @@ impl<T: MessageTransport> PlayerNetworking<T> {
     }
 
     /// Handles receiving of a message for a given remote player. This handles both received game
-    /// packets as well as meta stuff like the latency probes.
+    /// packets as well.
     fn handle_message(
         &self,
         remote: u64,
         message: &Message,
     ) -> Result<(), PlayerNetworkingError<T>> {
         // TODO: We can save on some locking here
-        // TODO: add time-out to prevent handling packets of recently or about to be
-        // disconnected players.
-        // tracing::info!("Received message {message:?}");
 
         // Create player session entry if the player hasn't recently disconnected and doesn't exist
         // yet in our session map.
@@ -158,6 +123,13 @@ impl<T: MessageTransport> PlayerNetworking<T> {
             if !read_guard.contains_key(&remote) {
                 // Drop the guard to prevent deadlocking here
                 drop(read_guard);
+
+                // Block traffic from this remote for a while.
+                if is_blocked(remote) {
+                    self.ignore_blocked(remote);
+                    tracing::info!("Got traffic from blocked remote {remote:?}. Blocking traffic for a while.");
+                    return Ok(());
+                }
 
                 let session = PlayerNetworkingSession::new();
                 if let Entry::Vacant(v) = self
@@ -182,7 +154,8 @@ impl<T: MessageTransport> PlayerNetworking<T> {
         match message {
             Message::RawPacket(channel, data) => {
                 tracing::info!("Received raw packet {channel} -> {data:?}");
-                self.raw_inbound.push(InboundRawPacket {
+                self.raw_inbound
+                    .push(InboundRawPacket {
                         sender: remote,
                         data: data.clone(),
                     })
@@ -192,19 +165,6 @@ impl<T: MessageTransport> PlayerNetworking<T> {
                 session.inbound[*packet_type as usize]
                     .push(data.clone())
                     .map_err(|_| PlayerNetworkingError::PacketQueueBounds(*packet_type))?;
-            }
-            Message::LatencyPing(seq) => {
-                self.transport
-                    .send(remote, &Message::LatencyPong(*seq))
-                    .unwrap();
-            }
-            Message::LatencyPong(seq) => {
-                session
-                    .latency
-                    .write()
-                    .ok()
-                    .ok_or(PlayerNetworkingError::LatencyTracking)?
-                    .end_probe(*seq);
             }
         }
 
@@ -241,10 +201,7 @@ impl<T: MessageTransport> PlayerNetworking<T> {
 
     /// Check if the specified remote party is on disconnect cooldown.
     pub fn remote_in_cooldown(&self, remote: u64) -> bool {
-        self.disconnects
-            .read()
-            .unwrap()
-            .contains_key(&remote)
+        self.disconnects.read().unwrap().get(&remote).is_some_and(|i| &Instant::now() < i)
     }
 
     /// Clears out residual data for a player session.
@@ -253,7 +210,7 @@ impl<T: MessageTransport> PlayerNetworking<T> {
             self.disconnects
                 .write()
                 .map_err(|_| PlayerNetworkingError::DisconnectMapPoison)?
-                .insert(remote.clone(), Instant::now());
+                .insert(remote, Instant::now() + DISCONNECT_IGNORE_TIMEOUT);
             tracing::info!("Added closed connection to ignore map");
         }
 
@@ -269,20 +226,26 @@ impl<T: MessageTransport> PlayerNetworking<T> {
 
         Ok(())
     }
+
+    /// Temporarily add user to
+    pub fn ignore_blocked(&self, remote: u64) {
+        self.disconnects
+            .write()
+            .unwrap()
+            .insert(remote, Instant::now() + BLOCKED_IGNORE_TIMEOUT);
+        self.transport.close(remote).unwrap();
+    }
 }
 
 /// Represents an individual players connection.
 pub struct PlayerNetworkingSession {
     /// Host the inbound packets for the session with this player.
     inbound: [ArrayQueue<Vec<u8>>; u8::MAX as usize],
-    /// Tracks latency for a given connection.
-    latency: RwLock<LatencyTracker>,
 }
 
 impl PlayerNetworkingSession {
     pub fn new() -> Self {
         Self {
-            latency: RwLock::new(LatencyTracker::new()),
             inbound: std::array::from_fn(|_| ArrayQueue::new(PACKET_QUEUE_CAPACITY)),
         }
     }
@@ -293,10 +256,6 @@ pub enum Message {
     RawPacket(i32, Vec<u8>),
     /// Packet originating from the game.
     GamePacket(u8, Vec<u8>),
-    /// Latency ping. Sent to kick-off latency probing.
-    LatencyPing(LatencySequence),
-    /// Latency pong. Sent in reply to the ping.
-    LatencyPong(LatencySequence),
 }
 
 impl Message {
@@ -343,9 +302,6 @@ impl Message {
                 23 => k_nSteamNetworkingSend_UnreliableNoNagle,
                 _ => k_nSteamNetworkingSend_Reliable,
             },
-
-            Message::LatencyPing(_) => k_nSteamNetworkingSend_UnreliableNoNagle,
-            Message::LatencyPong(_) => k_nSteamNetworkingSend_UnreliableNoNagle,
         }
     }
 }
@@ -412,13 +368,6 @@ impl MessageTransport for SteamMessageTransport {
             );
         }
 
-        // self.client.networking_messages().send_message_to_user(
-        //     identity,
-        //     message.send_flags() | SendFlags::AUTO_RESTART_BROKEN_SESSION,
-        //     &data,
-        //     self.messages_channel as u32,
-        // )?;
-
         Ok(())
     }
 
@@ -447,7 +396,6 @@ impl MessageTransport for SteamMessageTransport {
         // Why the fuck isn't this in steamworks as an explicit fn?
         unsafe {
             let messages = SteamAPI_SteamNetworkingMessages_SteamAPI_v002();
-
             let identity = networking_identity(remote);
             SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser(messages, &identity as _);
         }
@@ -484,11 +432,7 @@ mod test {
     impl MessageTransport for MockMessageTransport {
         type TransportError = MockMessageError;
 
-        fn send(
-            &self,
-            remote: u64,
-            message: &super::Message,
-        ) -> Result<(), Self::TransportError> {
+        fn send(&self, remote: u64, message: &super::Message) -> Result<(), Self::TransportError> {
             self.outbound.push((*remote, message.clone())).unwrap();
             Ok(())
         }

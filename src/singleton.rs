@@ -1,12 +1,12 @@
 use pelite::pattern;
 use pelite::pe::Pe;
-use pelite::pe::Rva;
 use pelite::pe::PeView;
-use windows::core::PCSTR;
-use windows::Win32::System::LibraryLoader::GetModuleHandleA;
+use pelite::pe::Rva;
 use std::collections;
 use std::sync;
 use thiserror::Error;
+use windows::core::PCSTR;
+use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 
 pub trait DLRFLocatable {
     const DLRF_NAME: &'static str;
