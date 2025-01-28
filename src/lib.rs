@@ -77,7 +77,6 @@ pub unsafe fn init(config: Config) {
     tracing::info!("Set EAC hooks");
 
     // Set the server redirect and set up the key derivation hook
-    let config = Arc::new(config::read_config_file().unwrap_or_default());
     setup_cryptography(&module, config.clone()).expect("Could not set up sodium hooks");
     setup_winhttp(config.clone()).expect("Could not set up WinHTTP hooks");
 
@@ -365,6 +364,8 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
     // tracing::info!("Packet Send: {packet_send_va:x?}");
     // tracing::info!("Disconnect: {disconnect_va:x?}");
 
+    // Retool the FSDP layer packets to also use steams new messaging API.
+    #[cfg(feature = "eldenring")]
     unsafe { steam::set_hooks() };
 
     unsafe {
@@ -428,13 +429,13 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
         P2P_PACKET_SEND
             .initialize(
                 transmute(packet_send_va),
-                move |p1: usize,
-                      p2: usize,
+                move |_p1: usize,
+                      _p2: usize,
                       steam_id: *const u64,
                       packet_type: u8,
                       buffer: *const u8,
                       packet_size: u32,
-                      p7: u8| {
+                      _p7: u8| {
                     #[cfg(feature = "armoredcore6")]
                     if !should_use_new_netcode(&packet_type) {
                         return P2P_PACKET_SEND.call(
@@ -447,8 +448,6 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
                             p7,
                         );
                     }
-
-                    // tracing::info!("Sending game data packet. size = {packet_size}.");
 
                     let remote = *(steam_id.as_ref().unwrap());
                     let contents = std::slice::from_raw_parts(buffer, packet_size as usize);
@@ -508,6 +507,7 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
     Ok(())
 }
 
+#[cfg(feature = "armoredcore6")]
 fn should_use_new_netcode(packet_type: &u8) -> bool {
     match packet_type {
         1 => true,

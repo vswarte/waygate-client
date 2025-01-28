@@ -2,7 +2,12 @@ use std::{ffi::c_void, mem::transmute};
 
 use retour::static_detour;
 use steamworks_sys::{
-    EP2PSend, ESteamNetworkingIdentityType, SteamAPI_ISteamUser_GetAuthSessionTicket, SteamAPI_ISteamUser_GetSteamID, SteamAPI_RegisterCallback, SteamAPI_SteamNetworkingIdentity_Clear, SteamAPI_SteamNetworkingIdentity_SetSteamID, SteamAPI_SteamNetworking_v006, SteamAPI_SteamUser_v021, SteamNetworkingIdentity, SteamNetworkingIdentity__bindgen_ty_2
+    EFriendRelationship, ESteamNetworkingIdentityType,
+    SteamAPI_ISteamFriends_GetFriendRelationship, SteamAPI_ISteamUser_GetAuthSessionTicket,
+    SteamAPI_ISteamUser_GetSteamID, SteamAPI_RegisterCallback, SteamAPI_SteamFriends_v017,
+    SteamAPI_SteamNetworkingIdentity_Clear, SteamAPI_SteamNetworkingIdentity_SetSteamID,
+    SteamAPI_SteamNetworking_v006, SteamAPI_SteamUser_v021, SteamNetworkingIdentity,
+    SteamNetworkingIdentity__bindgen_ty_2,
 };
 use vtable_rs::{vtable, VPtr};
 use windows::Win32::System::Memory::{
@@ -17,7 +22,7 @@ static_detour! {
         u64,
         *const u8,
         u32,
-        EP2PSend,
+        i32,
         i32
     ) -> bool;
 
@@ -35,7 +40,6 @@ static_detour! {
     static STEAM_CLOSE_P2P_CHANNEL_WITH_USER: extern "C" fn(*const SteamNetworking006, u64, i32) -> bool;
 }
 
-
 pub fn networking_identity(steam_id: u64) -> SteamNetworkingIdentity {
     let mut id = SteamNetworkingIdentity {
         m_eType: ESteamNetworkingIdentityType::k_ESteamNetworkingIdentityType_Invalid,
@@ -48,6 +52,15 @@ pub fn networking_identity(steam_id: u64) -> SteamNetworkingIdentity {
     };
 
     id
+}
+
+// Is the specified account blocked?
+pub fn is_blocked(steam_id: u64) -> bool {
+    let friends = unsafe { SteamAPI_SteamFriends_v017() };
+    let relationship = unsafe { SteamAPI_ISteamFriends_GetFriendRelationship(friends, steam_id) };
+
+    relationship == EFriendRelationship::k_EFriendRelationshipIgnored
+        || relationship == EFriendRelationship::k_EFriendRelationshipIgnoredFriend
 }
 
 pub unsafe fn set_hooks() {
@@ -92,11 +105,11 @@ pub unsafe fn get_auth_ticket() -> (u64, Vec<u8>) {
 }
 
 extern "C" fn send_p2p_packet_hook(
-    networking: *const SteamNetworking006,
+    _networking: *const SteamNetworking006,
     remote: u64,
     data: *const u8,
     data_size: u32,
-    send_type: EP2PSend,
+    _send_type: i32,
     channel: i32,
 ) -> bool {
     {
@@ -106,19 +119,12 @@ extern "C" fn send_p2p_packet_hook(
         tracing::debug!("SendP2PPacket. channel = {channel}. size = {size}. remote = {remote}. data = {data:?}.");
     }
 
-    //STEAM_SEND_P2P_PACKET.call(networking, remote, data, data_size, send_type, channel);
-
-    // // Exclude waygate wrapped traffic
-    // if channel == P2P_MESSAGES_CHANNEL {
-    //     return STEAM_SEND_P2P_PACKET.call(networking, remote, data, data_size, send_type, channel);
-    // }
-
     let data = unsafe { std::slice::from_raw_parts(data, data_size as usize) };
-
-    if let Err(err) = PLAYER_NETWORKING.get().unwrap().send_message(
-        remote,
-        &Message::RawPacket(channel, data.to_vec()),
-    ) {
+    if let Err(err) = PLAYER_NETWORKING
+        .get()
+        .unwrap()
+        .send_message(remote, &Message::RawPacket(channel, data.to_vec()))
+    {
         tracing::error!("Could not send raw packet to {remote}. {err}");
         false
     } else {
@@ -127,7 +133,7 @@ extern "C" fn send_p2p_packet_hook(
 }
 
 extern "C" fn read_p2p_packet_hook(
-    networking: *const SteamNetworking006,
+    _networking: *const SteamNetworking006,
     data_out: *mut u8,
     data_alloc_size: u32,
     data_size_out: *mut u32,
@@ -159,15 +165,15 @@ extern "C" fn read_p2p_packet_hook(
 }
 
 extern "C" fn accept_p2p_session_with_user_hook(
-    networking: *const SteamNetworking006,
-    remote: u64,
+    _networking: *const SteamNetworking006,
+    _remote: u64,
 ) -> bool {
     tracing::warn!("AcceptP2PSessionWithUser called. This means that not all messaging is happening using the messages API");
     false
 }
 
 extern "C" fn close_p2p_channel_with_user_hook(
-    networking: *const SteamNetworking006,
+    _networking: *const SteamNetworking006,
     remote: u64,
     // channel: i32,
 ) -> bool {
@@ -241,7 +247,7 @@ pub struct SteamNetworking006Vmt {
         remote: u64,
         data: *const u8,
         data_size: u32,
-        send_type: EP2PSend,
+        send_type: i32,
         channel: i32,
     ) -> bool,
 
@@ -257,15 +263,12 @@ pub struct SteamNetworking006Vmt {
         channel: i32,
     ) -> bool,
 
-    pub accept_p2p_session_with_user:
-        extern "C" fn(*const SteamNetworking006, remote: u64) -> bool,
+    pub accept_p2p_session_with_user: extern "C" fn(*const SteamNetworking006, remote: u64) -> bool,
 
-    pub close_p2p_session_with_user:
-        extern "C" fn(*const SteamNetworking006, remote: u64) -> bool,
+    pub close_p2p_session_with_user: extern "C" fn(*const SteamNetworking006, remote: u64) -> bool,
 
     pub close_p2p_channel_with_user:
         extern "C" fn(*const SteamNetworking006, remote: u64, channel: i32) -> bool,
-
     // virtual unknown_ret GetP2PSessionState(CSteamID, P2PSessionState_t*) = 0;
     // virtual unknown_ret AllowP2PPacketRelay(bool) = 0;
     // virtual unknown_ret CreateListenSocket(int, SteamIPAddress_t, unsigned short, bool) = 0;
