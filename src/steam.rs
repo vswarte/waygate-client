@@ -1,10 +1,8 @@
 use std::{ffi::c_void, mem::transmute};
 
 use retour::static_detour;
-use steamworks::SteamId;
 use steamworks_sys::{
-    CSteamID, EP2PSend, SteamAPI_ISteamUser_GetAuthSessionTicket, SteamAPI_ISteamUser_GetSteamID,
-    SteamAPI_RegisterCallback, SteamAPI_SteamNetworking_v006, SteamAPI_SteamUser_v021,
+    CSteamID, EP2PSend, ESteamNetworkingIdentityType, SteamAPI_ISteamUser_GetAuthSessionTicket, SteamAPI_ISteamUser_GetSteamID, SteamAPI_RegisterCallback, SteamAPI_SteamNetworkingIdentity_Clear, SteamAPI_SteamNetworkingIdentity_SetSteamID, SteamAPI_SteamNetworking_v006, SteamAPI_SteamUser_v021, SteamNetworkingIdentity, SteamNetworkingIdentity__bindgen_ty_2
 };
 use vtable_rs::{vtable, VPtr};
 use windows::Win32::System::Memory::{
@@ -16,7 +14,7 @@ use crate::{p2p::Message, P2P_MESSAGES_CHANNEL, PLAYER_NETWORKING};
 static_detour! {
     static STEAM_SEND_P2P_PACKET: extern "C" fn(
         *const SteamNetworking006,
-        CSteamID,
+        u64,
         *const u8,
         u32,
         EP2PSend,
@@ -28,74 +26,57 @@ static_detour! {
         *mut u8,
         u32,
         *mut u32,
-        *mut CSteamID,
+        *mut u64,
         i32
     ) -> bool;
 
-    static STEAM_ACCEPT_P2P_SESSION_WITH_USER: extern "C" fn(*const SteamNetworking006, CSteamID) -> bool;
+    static STEAM_ACCEPT_P2P_SESSION_WITH_USER: extern "C" fn(*const SteamNetworking006, u64) -> bool;
 
-    static STEAM_CLOSE_P2P_CHANNEL_WITH_USER: extern "C" fn(*const SteamNetworking006, CSteamID, i32) -> bool;
+    static STEAM_CLOSE_P2P_CHANNEL_WITH_USER: extern "C" fn(*const SteamNetworking006, u64, i32) -> bool;
+}
+
+
+pub fn networking_identity(steam_id: u64) -> SteamNetworkingIdentity {
+    let mut id = SteamNetworkingIdentity {
+        m_eType: ESteamNetworkingIdentityType::k_ESteamNetworkingIdentityType_Invalid,
+        m_cbSize: 0,
+        __bindgen_anon_1: SteamNetworkingIdentity__bindgen_ty_2 { m_steamID64: 0 },
+    };
+    unsafe {
+        SteamAPI_SteamNetworkingIdentity_Clear(&mut id);
+        SteamAPI_SteamNetworkingIdentity_SetSteamID(&mut id, steam_id);
+    };
+
+    id
 }
 
 pub unsafe fn set_hooks() {
     let networking = SteamAPI_SteamNetworking_v006() as *mut SteamNetworking006;
     let vmt = networking.as_mut().unwrap().vmt.as_mut().unwrap();
 
-    // let mut protect = PAGE_PROTECTION_FLAGS::default();
-    // VirtualProtect(
-    //     vmt as *const SteamNetworking006Vmt as _,
-    //     0x100,
-    //     PAGE_EXECUTE_READWRITE,
-    //     &mut protect as _,
-    // );
+    let mut protect = PAGE_PROTECTION_FLAGS::default();
+    VirtualProtect(
+        vmt as *const SteamNetworking006Vmt as _,
+        0x100,
+        PAGE_EXECUTE_READWRITE,
+        &mut protect as _,
+    );
 
-    STEAM_SEND_P2P_PACKET
-        .initialize(vmt.send_p2p_packet, send_p2p_packet_hook)
-        .unwrap()
-        .enable()
-        .unwrap();
+    vmt.send_p2p_packet = send_p2p_packet_hook;
+    vmt.read_p2p_packet = read_p2p_packet_hook;
+    vmt.accept_p2p_session_with_user = accept_p2p_session_with_user_hook;
+    vmt.close_p2p_session_with_user = close_p2p_channel_with_user_hook;
 
-    STEAM_READ_P2P_PACKET
-        .initialize(vmt.read_p2p_packet, read_p2p_packet_hook)
-        .unwrap()
-        .enable()
-        .unwrap();
-
-    STEAM_ACCEPT_P2P_SESSION_WITH_USER
-        .initialize(
-            vmt.accept_p2p_session_with_user,
-            accept_p2p_session_with_user_hook,
-        )
-        .unwrap()
-        .enable()
-        .unwrap();
-
-    STEAM_CLOSE_P2P_CHANNEL_WITH_USER
-        .initialize(
-            vmt.close_p2p_channel_with_user,
-            close_p2p_channel_with_user_hook,
-        )
-        .unwrap()
-        .enable()
-        .unwrap();
-
-    // vmt.read_p2p_packet = read_p2p_packet_hook as _;
-    // vmt.send_p2p_packet = send_p2p_packet_hook as _;
-    // vmt.accept_p2p_session_with_user = accept_p2p_session_with_user_hook as _;
-    // vmt.close_p2p_channel_with_user = close_p2p_channel_with_user_hook as _;
-    // vmt.is_p2p_packet_available = ||
-
-    // VirtualProtect(
-    //     vmt as *const SteamNetworking006Vmt as _,
-    //     0x100,
-    //     protect,
-    //     std::ptr::null_mut(),
-    // );
+    VirtualProtect(
+        vmt as *const SteamNetworking006Vmt as _,
+        0x100,
+        protect,
+        std::ptr::null_mut(),
+    );
 }
 
 pub unsafe fn get_auth_ticket() -> (u64, Vec<u8>) {
     let user = SteamAPI_SteamUser_v021();
-
 
     let steam_id = SteamAPI_ISteamUser_GetSteamID(user);
     let mut ticket_buffer = vec![0; 1024];
@@ -110,9 +91,9 @@ pub unsafe fn get_auth_ticket() -> (u64, Vec<u8>) {
     (steam_id, ticket_buffer)
 }
 
-fn send_p2p_packet_hook(
+extern "C" fn send_p2p_packet_hook(
     networking: *const SteamNetworking006,
-    remote: CSteamID,
+    remote: u64,
     data: *const u8,
     data_size: u32,
     send_type: EP2PSend,
@@ -121,112 +102,81 @@ fn send_p2p_packet_hook(
     {
         let size = data_size as usize;
         let data = unsafe { std::slice::from_raw_parts(data, size) };
-        let remote = unsafe { remote.m_steamid.m_unAll64Bits };
 
-        tracing::info!("SendP2PPacket. channel = {channel}. size = {size}. remote = {remote}. data = {data:?}.");
+        tracing::debug!("SendP2PPacket. channel = {channel}. size = {size}. remote = {remote}. data = {data:?}.");
     }
 
-    STEAM_SEND_P2P_PACKET.call(networking, remote, data, data_size, send_type, channel)
+    //STEAM_SEND_P2P_PACKET.call(networking, remote, data, data_size, send_type, channel);
 
     // // Exclude waygate wrapped traffic
     // if channel == P2P_MESSAGES_CHANNEL {
     //     return STEAM_SEND_P2P_PACKET.call(networking, remote, data, data_size, send_type, channel);
     // }
-    //
-    // let data = unsafe { std::slice::from_raw_parts(data, data_size as usize) };
-    // let remote = unsafe { remote.m_steamid.m_unAll64Bits };
-    // tracing::info!("SendP2PPacket. channel = {channel}. size = {data_size}. data = {data:?}. remote = {remote}");
-    //
-    // if let Err(err) = PLAYER_NETWORKING.get().unwrap().send_message(
-    //     &SteamId::from_raw(remote),
-    //     &Message::RawPacket(channel, data.to_vec()),
-    // ) {
-    //     tracing::error!("Could not send raw packet to {remote}. {err}");
-    //     false
-    // } else {
-    //     true
-    // }
+
+    let data = unsafe { std::slice::from_raw_parts(data, data_size as usize) };
+
+    if let Err(err) = PLAYER_NETWORKING.get().unwrap().send_message(
+        remote,
+        &Message::RawPacket(channel, data.to_vec()),
+    ) {
+        tracing::error!("Could not send raw packet to {remote}. {err}");
+        false
+    } else {
+        true
+    }
 }
 
-fn read_p2p_packet_hook(
+extern "C" fn read_p2p_packet_hook(
     networking: *const SteamNetworking006,
     data_out: *mut u8,
     data_alloc_size: u32,
     data_size_out: *mut u32,
-    remote_out: *mut CSteamID,
+    remote_out: *mut u64,
     channel: i32,
 ) -> bool {
-    let result = STEAM_READ_P2P_PACKET.call(
-        networking,
-        data_out,
-        data_alloc_size,
-        data_size_out,
-        remote_out,
-        channel,
+    let Some(packet) = PLAYER_NETWORKING.get().unwrap().dequeue_raw_packet() else {
+        return false;
+    };
+
+    tracing::debug!(
+        "ReadP2PPacket. channel = {channel}. size = {}. remote = {}",
+        packet.data.len(),
+        packet.sender
     );
 
-    if result != false {
-        let size = unsafe { *data_size_out as usize };
-        let data = unsafe { std::slice::from_raw_parts(data_out, size) };
-        let remote = unsafe { *(remote_out as *mut u64) };
+    unsafe {
+        if (data_alloc_size as usize) < packet.data.len() {
+            return false;
+        }
 
-        tracing::info!(
-            "ReadP2PPacket. channel = {channel}. size = {size}. remote = {remote}. data = {data:?}",
-            // packet.data.len(),
-            // packet.sender
-        );
+        *data_size_out = packet.data.len() as u32;
+        *remote_out = transmute(packet.sender);
+
+        std::ptr::copy_nonoverlapping(packet.data.as_ptr(), data_out, packet.data.len());
     }
 
-    result
-
-    // Exclude waygate wrapped traffic
-    // if channel == P2P_MESSAGES_CHANNEL {
-    //     return STEAM_READ_P2P_PACKET.call(networking, data_out, data_alloc_size, data_size_out, remote_out, channel);
-    // }
-    //
-    // let Some(packet) = PLAYER_NETWORKING.get().unwrap().dequeue_raw_packet() else {
-    //     return false;
-    // };
-    //
-    // tracing::info!(
-    //     "ReadP2PPacket. channel = {channel}. size = {}. remote = {}",
-    //     packet.data.len(),
-    //     packet.sender
-    // );
-    // unsafe {
-    //     if ((*data_size_out) as usize) < packet.data.len() {
-    //         return false;
-    //     }
-    //
-    //     *data_size_out = packet.data.len() as u32;
-    //     *remote_out = transmute(packet.sender);
-    //
-    //     std::ptr::copy_nonoverlapping(packet.data.as_ptr(), data_out, packet.data.len());
-    // }
-    //
-    // true
+    true
 }
 
-fn accept_p2p_session_with_user_hook(
+extern "C" fn accept_p2p_session_with_user_hook(
     networking: *const SteamNetworking006,
-    remote: CSteamID,
+    remote: u64,
 ) -> bool {
     tracing::warn!("AcceptP2PSessionWithUser called. This means that not all messaging is happening using the messages API");
     false
 }
 
-fn close_p2p_channel_with_user_hook(
+extern "C" fn close_p2p_channel_with_user_hook(
     networking: *const SteamNetworking006,
-    remote: CSteamID,
-    channel: i32,
+    remote: u64,
+    // channel: i32,
 ) -> bool {
-    let remote = unsafe { remote.m_steamid.m_unAll64Bits };
-    tracing::info!("CloseP2PChannelWithUser. channel = {channel}. remote = {remote}");
+    tracing::info!("CloseP2PChannelWithUser. remote = {remote}");
 
     PLAYER_NETWORKING
         .get()
         .unwrap()
-        .remove_session(&SteamId::from_raw(remote))
+        .remove_session(remote)
         .is_ok()
 }
 
@@ -288,7 +238,7 @@ fn close_p2p_channel_with_user_hook(
 pub struct SteamNetworking006Vmt {
     pub send_p2p_packet: extern "C" fn(
         *const SteamNetworking006,
-        remote: CSteamID,
+        remote: u64,
         data: *const u8,
         data_size: u32,
         send_type: EP2PSend,
@@ -303,18 +253,18 @@ pub struct SteamNetworking006Vmt {
         data_out: *mut u8,
         data_alloc_size: u32,
         data_size_out: *mut u32,
-        remote_out: *mut CSteamID,
+        remote_out: *mut u64,
         channel: i32,
     ) -> bool,
 
     pub accept_p2p_session_with_user:
-        extern "C" fn(*const SteamNetworking006, remote: CSteamID) -> bool,
+        extern "C" fn(*const SteamNetworking006, remote: u64) -> bool,
 
     pub close_p2p_session_with_user:
-        extern "C" fn(*const SteamNetworking006, remote: CSteamID) -> bool,
+        extern "C" fn(*const SteamNetworking006, remote: u64) -> bool,
 
     pub close_p2p_channel_with_user:
-        extern "C" fn(*const SteamNetworking006, remote: CSteamID, channel: i32) -> bool,
+        extern "C" fn(*const SteamNetworking006, remote: u64, channel: i32) -> bool,
 
     // virtual unknown_ret GetP2PSessionState(CSteamID, P2PSessionState_t*) = 0;
     // virtual unknown_ret AllowP2PPacketRelay(bool) = 0;

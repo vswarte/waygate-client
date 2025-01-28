@@ -25,7 +25,7 @@ use pelite::{
 };
 use retour::static_detour;
 use singleton::get_instance;
-use steamworks::{Client, SteamId};
+use steamworks::Client;
 use steamworks_sys::{
     SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser,
     SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamNetworkingMessagesSessionRequest_t,
@@ -97,7 +97,7 @@ pub unsafe fn init(config: Config) {
             if PLAYER_NETWORKING
                 .get()
                 .unwrap()
-                .remote_in_cooldown(&SteamId::from_raw(remote))
+                .remote_in_cooldown(remote)
             {
                 tracing::info!("Got message from remote on cooldown. remote = {remote}");
                 return;
@@ -361,11 +361,11 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
             .map_err(InitError::AddressConversion)?
     };
 
-    tracing::info!("Packet Dequeue: {packet_dequeue_va:x?}");
-    tracing::info!("Packet Send: {packet_send_va:x?}");
-    tracing::info!("Disconnect: {disconnect_va:x?}");
+    // tracing::info!("Packet Dequeue: {packet_dequeue_va:x?}");
+    // tracing::info!("Packet Send: {packet_send_va:x?}");
+    // tracing::info!("Disconnect: {disconnect_va:x?}");
 
-    // unsafe { steam::set_hooks() };
+    unsafe { steam::set_hooks() };
 
     unsafe {
         let player_networking = player_networking.clone();
@@ -393,8 +393,7 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
                     }
 
                     let connection = connection.as_ref().unwrap();
-                    let remote = connection.steam_id();
-                    let packet = match player_networking.dequeue_game_packet(&remote, packet_type) {
+                    let packet = match player_networking.dequeue_game_packet(connection.steam_id, packet_type) {
                         Ok(message) => message.unwrap_or_default(),
                         Err(e) => {
                             tracing::error!("Could not dequeue game packet for player. e = {e}");
@@ -451,11 +450,11 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
 
                     // tracing::info!("Sending game data packet. size = {packet_size}.");
 
-                    let remote = SteamId::from_raw(*(steam_id.as_ref().unwrap()));
+                    let remote = *(steam_id.as_ref().unwrap());
                     let contents = std::slice::from_raw_parts(buffer, packet_size as usize);
 
                     if let Err(e) = player_networking.send_message(
-                        &remote,
+                        remote,
                         &Message::GamePacket(packet_type, contents.to_vec()),
                     ) {
                         tracing::error!("Could not send message to {remote:?}. e = {e}");
@@ -478,11 +477,10 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
                 transmute(disconnect_va),
                 move |connection: *const MTInternalThreadSteamConnection| {
                     let connection = connection.as_ref().unwrap();
-                    let remote = SteamId::from_raw(connection.steam_id);
 
                     // This will realistically only occur in the case of poisoning but
                     // unwrap() requires SteamMessageTransport to implement Debug so :shrug:
-                    if let Err(e) = player_networking.remove_session(&remote) {
+                    if let Err(e) = player_networking.remove_session(connection.steam_id) {
                         panic!("Could not remove player session. e = {}", e);
                     }
 
@@ -563,12 +561,6 @@ static_detour! {
 struct MTInternalThreadSteamConnection {
     _unk0: [u8; 0x128],
     steam_id: u64,
-}
-
-impl MTInternalThreadSteamConnection {
-    pub fn steam_id(&self) -> SteamId {
-        SteamId::from_raw(self.steam_id)
-    }
 }
 
 // Too lazy to write something good for this
