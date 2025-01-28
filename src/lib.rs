@@ -3,14 +3,18 @@
 pub mod config;
 mod eac;
 mod p2p;
-// mod player_limit;
 mod steam;
 
 mod singleton;
 mod task;
 
 use std::{
-    ffi::c_void, mem::transmute, ptr::copy_nonoverlapping, sync::Arc, thread::spawn, time::Duration,
+    ffi::c_void,
+    mem::transmute,
+    ptr::copy_nonoverlapping,
+    sync::{Arc, OnceLock},
+    thread::spawn,
+    time::Duration,
 };
 
 pub use config::Config;
@@ -21,7 +25,11 @@ use pelite::{
 };
 use retour::static_detour;
 use singleton::get_instance;
-use steamworks::{Client, SteamId};
+use steamworks::Client;
+use steamworks_sys::{
+    SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser,
+    SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamNetworkingMessagesSessionRequest_t,
+};
 use task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
 use thiserror::Error;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
@@ -40,7 +48,7 @@ const APP_ID: u32 = 1245620;
 const APP_ID: u32 = 1888160;
 
 /// Determines the steam messages channel used for the p2p swap.
-const P2P_MESSAGES_CHANNEL: u32 = 69420;
+pub const P2P_MESSAGES_CHANNEL: i32 = 69420;
 
 /// IMPORTANT!!
 /// If you're writing a mod and you're looking for these hooks to sync some data or coordinate some
@@ -77,10 +85,28 @@ pub unsafe fn init(config: Config) {
     // Spin up thread to wait for CSTaskImp to be initialized, then register a
     // task for our own message pump, such that it runs in lock-step with the
     // game's packet poll.
-    #[cfg(feature = "eldenring")]
     spawn(move || {
         // TODO: waiting for 5s is a race condition, need to actually await CSTask
         std::thread::sleep(Duration::from_secs(5));
+
+        // Handle any message session requests.
+        steam::register_callback(1251, |request: &SteamNetworkingMessagesSessionRequest_t| {
+            tracing::info!("SteamNetworkingMessagesSessionRequest Invoked.");
+
+            // Player just disconnected, we shouln't allow any messages in.
+            let remote = unsafe { request.m_identityRemote.__bindgen_anon_1.m_steamID64 };
+            if PLAYER_NETWORKING.get().unwrap().remote_in_cooldown(remote) {
+                tracing::info!("Got message from remote on cooldown. remote = {remote}");
+                return;
+            }
+
+            if !SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser(
+                SteamAPI_SteamNetworkingMessages_SteamAPI_v002(),
+                &request.m_identityRemote,
+            ) {
+                tracing::error!("Could not accept messaging session");
+            }
+        });
 
         // Set up the p2p swap
         setup_p2p(&module).expect("Could not set up p2p swap");
@@ -90,18 +116,15 @@ pub unsafe fn init(config: Config) {
 #[no_mangle]
 #[cfg(not(feature = "lib"))]
 pub unsafe extern "C" fn DllMain(_hmodule: usize, reason: u32) -> bool {
-    match reason {
-        1 => {
-            std::panic::set_hook(Box::new(panic_hook));
-            let appender = tracing_appender::rolling::never("./", "waygate-client.log");
-            tracing_subscriber::fmt().with_writer(appender).init();
+    if reason == 1 {
+        std::panic::set_hook(Box::new(panic_hook));
+        let appender = tracing_appender::rolling::never("./", "waygate-client.log");
+        tracing_subscriber::fmt().with_writer(appender).init();
 
-            init(config::read_config_file().unwrap_or_default());
-            true
-        }
-
-        _ => true,
+        init(config::read_config_file().unwrap_or_default());
     }
+
+    true
 }
 
 #[derive(Debug, Error)]
@@ -276,6 +299,9 @@ fn setup_cryptography(module: &PeView, config: Arc<Config>) -> Result<(), InitEr
     Ok(())
 }
 
+pub static PLAYER_NETWORKING: OnceLock<Arc<PlayerNetworking<SteamMessageTransport>>> =
+    OnceLock::new();
+
 /// Completely replaces the games P2P connection with our own implementation based on steamworks
 /// messaging API. This should significantly improve latency for Elden Ring and AC6 since it
 /// bypasses the reliability and fragmentation/batching layer that From Software uses for these
@@ -285,6 +311,10 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
 
     let transport = SteamMessageTransport::new(P2P_MESSAGES_CHANNEL, client);
     let player_networking = Arc::new(PlayerNetworking::new(transport));
+
+    if PLAYER_NETWORKING.set(player_networking.clone()).is_err() {
+        panic!("Could not set PLAYER_NETWORK_SESSION");
+    }
 
     let packet_dequeue_va = {
         let mut matches = [0u32; 2];
@@ -328,6 +358,12 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
             .map_err(InitError::AddressConversion)?
     };
 
+    // tracing::info!("Packet Dequeue: {packet_dequeue_va:x?}");
+    // tracing::info!("Packet Send: {packet_send_va:x?}");
+    // tracing::info!("Disconnect: {disconnect_va:x?}");
+
+    unsafe { steam::set_hooks() };
+
     unsafe {
         let player_networking = player_networking.clone();
 
@@ -342,9 +378,21 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
                       output: *mut u8,
                       max_size: u32,
                       control_byte: *mut u8| {
+                    #[cfg(feature = "armoredcore6")]
+                    if !should_use_new_netcode(&packet_type) {
+                        return P2P_PACKET_DEQUEUE.call(
+                            connection,
+                            packet_type,
+                            output,
+                            max_size,
+                            control_byte,
+                        );
+                    }
+
                     let connection = connection.as_ref().unwrap();
-                    let remote = connection.steam_id();
-                    let packet = match player_networking.dequeue_game_packet(&remote, packet_type) {
+                    let packet = match player_networking
+                        .dequeue_game_packet(connection.steam_id, packet_type)
+                    {
                         Ok(message) => message.unwrap_or_default(),
                         Err(e) => {
                             tracing::error!("Could not dequeue game packet for player. e = {e}");
@@ -379,18 +427,33 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
         P2P_PACKET_SEND
             .initialize(
                 transmute(packet_send_va),
-                move |_: usize,
-                      _: usize,
+                move |p1: usize,
+                      p2: usize,
                       steam_id: *const u64,
                       packet_type: u8,
                       buffer: *const u8,
                       packet_size: u32,
-                      _: u8| {
-                    let remote = SteamId::from_raw(*(steam_id.as_ref().unwrap()));
+                      p7: u8| {
+                    #[cfg(feature = "armoredcore6")]
+                    if !should_use_new_netcode(&packet_type) {
+                        return P2P_PACKET_SEND.call(
+                            p1,
+                            p2,
+                            steam_id,
+                            packet_type,
+                            buffer,
+                            packet_size,
+                            p7,
+                        );
+                    }
+
+                    // tracing::info!("Sending game data packet. size = {packet_size}.");
+
+                    let remote = *(steam_id.as_ref().unwrap());
                     let contents = std::slice::from_raw_parts(buffer, packet_size as usize);
 
                     if let Err(e) = player_networking
-                        .send_message(&remote, &Message::Packet(packet_type, contents.to_vec()))
+                        .send_message(remote, &Message::GamePacket(packet_type, contents.to_vec()))
                     {
                         tracing::error!("Could not send message to {remote:?}. e = {e}");
                         0
@@ -412,11 +475,10 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
                 transmute(disconnect_va),
                 move |connection: *const MTInternalThreadSteamConnection| {
                     let connection = connection.as_ref().unwrap();
-                    let remote = SteamId::from_raw(connection.steam_id);
 
                     // This will realistically only occur in the case of poisoning but
                     // unwrap() requires SteamMessageTransport to implement Debug so :shrug:
-                    if let Err(e) = player_networking.remove_session(&remote) {
+                    if let Err(e) = player_networking.remove_session(connection.steam_id) {
                         panic!("Could not remove player session. e = {}", e);
                     }
 
@@ -442,6 +504,27 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
     std::mem::forget(task);
 
     Ok(())
+}
+
+fn should_use_new_netcode(packet_type: &u8) -> bool {
+    match packet_type {
+        1 => true,
+        2 => true,
+        11 => true,
+        13 => true,
+        14 => true,
+        16 => true,
+        18 => true,
+        19 => true,
+        20 => true,
+        23 => true,
+        37 => true,
+        72 => true,
+        74 => true,
+        85 => true,
+        88 => true,
+        _ => false,
+    }
 }
 
 static_detour! {
@@ -476,12 +559,6 @@ static_detour! {
 struct MTInternalThreadSteamConnection {
     _unk0: [u8; 0x128],
     steam_id: u64,
-}
-
-impl MTInternalThreadSteamConnection {
-    pub fn steam_id(&self) -> SteamId {
-        SteamId::from_raw(self.steam_id)
-    }
 }
 
 // Too lazy to write something good for this

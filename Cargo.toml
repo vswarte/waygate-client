@@ -1,7 +1,7 @@
 [package]
 name = "waygate-client"
 edition = "2021"
-version = "0.0.1"
+version = "0.1.0"
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -18,7 +18,6 @@ toml = "0.7.2"
 thiserror = "1"
 steamworks = "0.10"
 steamworks-sys = "0.10"
-byteorder = "1"
 crossbeam = "0.8"
 tracing = "0.1"
 tracing-appender = "0.2"
@@ -30,9 +29,7 @@ log-panics = { version = "2", features = ["with-backtrace"] }
 base64 = "0.22"
 pelite = "0.10"
 bincode = "1"
-
-[dependencies.steamhook]
-git = "https://github.com/tremwil/steamhook.git"
+vtable-rs = "0.1"
 
 [dependencies.serde]
 version = "1.0"
@@ -52,13 +49,14 @@ features = [
     "Win32_Foundation",
     "Win32_Networking_WinHttp",
     "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
 ]
 
 [patch.crates-io]
 libudis86-sys = { git = 'https://github.com/vars1ty/libudis86-sys.git' }
 
 [features]
-default = ["eldenring", "p2p"]
+default = ["eldenring"]
 eldenring = []
 armoredcore6 = []
 p2p = []

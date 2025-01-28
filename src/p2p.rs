@@ -11,14 +11,14 @@ use latency::{LatencySequence, LatencyTracker};
 use serde::{Deserialize, Serialize};
 use steamworks::{
     networking_types::{NetworkingIdentity, SendFlags},
-    Client, ClientManager, SteamId,
+    Client, ClientManager,
 };
 use steamworks_sys::{
-    ESteamNetworkingIdentityType, SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser,
-    SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamNetworkingIdentity,
-    SteamNetworkingIdentity__bindgen_ty_2,
+    k_nSteamNetworkingSend_AutoRestartBrokenSession, k_nSteamNetworkingSend_Reliable, k_nSteamNetworkingSend_UnreliableNoNagle, ESteamNetworkingIdentityType, SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser, SteamAPI_ISteamNetworkingMessages_SendMessageToUser, SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamAPI_SteamNetworking_v006, SteamNetworkingIdentity, SteamNetworkingIdentity__bindgen_ty_2
 };
 use thiserror::Error;
+
+use crate::steam::networking_identity;
 
 /// Determines the capacity of a packet queue. The client DLL will crash if this capacity is ever
 /// exceeced.
@@ -44,16 +44,25 @@ pub enum PlayerNetworkingError<T: MessageTransport> {
     Transport(T::TransportError),
     #[error("Latency tracking error.")]
     LatencyTracking,
+    #[error("Unknown lobby participant")]
+    UnknownParticipant,
 }
 
 /// Container for all the session of all connected players.
 pub struct PlayerNetworking<T: MessageTransport> {
     /// All current sessions with other players.
-    sessions: RwLock<HashMap<SteamId, PlayerNetworkingSession>>,
+    sessions: RwLock<HashMap<u64, PlayerNetworkingSession>>,
     /// Holds disconnects, used to ensure we dont handle anything for disconnected players.
-    disconnects: RwLock<HashMap<SteamId, Instant>>,
+    disconnects: RwLock<HashMap<u64, Instant>>,
     /// Holds the low-level transport used for actually sending and receiving data.
     transport: T,
+    /// Received raw packets.
+    raw_inbound: ArrayQueue<InboundRawPacket>,
+}
+
+pub struct InboundRawPacket {
+    pub sender: u64,
+    pub data: Vec<u8>,
 }
 
 impl<T: MessageTransport> PlayerNetworking<T> {
@@ -62,6 +71,7 @@ impl<T: MessageTransport> PlayerNetworking<T> {
             sessions: Default::default(),
             disconnects: Default::default(),
             transport,
+            raw_inbound: ArrayQueue::new(0x20),
         }
     }
 
@@ -105,10 +115,16 @@ impl<T: MessageTransport> PlayerNetworking<T> {
                     }
 
                     match message {
-                        Ok(message) => if let Err(e) = self.handle_message(remote, message) {
-                            tracing::error!("Could not handle message from {remote:?}. e = {e}");
+                        Ok(message) => {
+                            if let Err(e) = self.handle_message(*remote, message) {
+                                tracing::error!(
+                                    "Could not handle message from {remote:?}. e = {e}"
+                                );
+                            }
                         }
-                        Err(e) => tracing::error!("Could not deserialize message from {remote:?}. e = {e}"),
+                        Err(e) => tracing::error!(
+                            "Could not deserialize message from {remote:?}. e = {e}"
+                        ),
                     }
                 }
                 Err(e) => tracing::error!("Could not figure out remote. e = {e}"),
@@ -122,12 +138,13 @@ impl<T: MessageTransport> PlayerNetworking<T> {
     /// packets as well as meta stuff like the latency probes.
     fn handle_message(
         &self,
-        remote: &SteamId,
+        remote: u64,
         message: &Message,
     ) -> Result<(), PlayerNetworkingError<T>> {
         // TODO: We can save on some locking here
         // TODO: add time-out to prevent handling packets of recently or about to be
         // disconnected players.
+        // tracing::info!("Received message {message:?}");
 
         // Create player session entry if the player hasn't recently disconnected and doesn't exist
         // yet in our session map.
@@ -138,57 +155,57 @@ impl<T: MessageTransport> PlayerNetworking<T> {
                 .read()
                 .map_err(|_| PlayerNetworkingError::SessionMapPoison)?;
 
-            if !read_guard.contains_key(remote) {
+            if !read_guard.contains_key(&remote) {
                 // Drop the guard to prevent deadlocking here
                 drop(read_guard);
 
-                // Relock the session map since the player entry might have been
-                // added by another thread since we released the read lock.
+                let session = PlayerNetworkingSession::new();
                 if let Entry::Vacant(v) = self
                     .sessions
                     .write()
                     .map_err(|_| PlayerNetworkingError::SessionMapPoison)?
-                    .entry(*remote)
+                    .entry(remote)
                 {
-                    v.insert(PlayerNetworkingSession::new());
+                    v.insert(session);
                 }
             }
         }
 
-        // Handle the message. Might run into the situation where the entry has been dropped
-        // since we inserted it.
-        if let Some(session) = self
+        let sessions = self
             .sessions
             .read()
-            .map_err(|_| PlayerNetworkingError::SessionMapPoison)?
-            .get(remote)
-        {
-            match message {
-                // Incoming game packet, push it to the queue for dequeuing by the game
-                Message::Packet(packet_type, data) => {
-                    session.inbound[*packet_type as usize]
-                        .push(data.clone())
-                        .map_err(|_| PlayerNetworkingError::PacketQueueBounds(*packet_type))?;
-                }
+            .map_err(|_| PlayerNetworkingError::SessionMapPoison)?;
+        let session = sessions
+            .get(&remote)
+            .ok_or(PlayerNetworkingError::UnknownParticipant)?;
 
-                // Reply to a ping with a pong.
-                // Message::LatencyPing(seq) => self
-                //     .transport
-                //     .send(remote, &Message::LatencyPong(*seq))
-                //     .unwrap(),
-
-                // Update local stats for the session when a pong comes back
-                // Message::LatencyPong(seq) => session
-                //     .latency
-                //     .write()
-                //     .map_err(|_| PlayerNetworkingError::LatencyTracking)?
-                //     .end_probe(*seq),
-                _ => {}
+        match message {
+            Message::RawPacket(channel, data) => {
+                tracing::info!("Received raw packet {channel} -> {data:?}");
+                self.raw_inbound.push(InboundRawPacket {
+                        sender: remote,
+                        data: data.clone(),
+                    })
+                    .map_err(|_| PlayerNetworkingError::PacketQueueBounds(254))?;
             }
-        } else {
-            tracing::error!(
-                "Tried handling message for non-existent player entry. remote = {remote:?}"
-            );
+            Message::GamePacket(packet_type, data) => {
+                session.inbound[*packet_type as usize]
+                    .push(data.clone())
+                    .map_err(|_| PlayerNetworkingError::PacketQueueBounds(*packet_type))?;
+            }
+            Message::LatencyPing(seq) => {
+                self.transport
+                    .send(remote, &Message::LatencyPong(*seq))
+                    .unwrap();
+            }
+            Message::LatencyPong(seq) => {
+                session
+                    .latency
+                    .write()
+                    .ok()
+                    .ok_or(PlayerNetworkingError::LatencyTracking)?
+                    .end_probe(*seq);
+            }
         }
 
         Ok(())
@@ -197,7 +214,7 @@ impl<T: MessageTransport> PlayerNetworking<T> {
     /// Sends a message through the contained transport.
     pub fn send_message(
         &self,
-        remote: &SteamId,
+        remote: u64,
         message: &Message,
     ) -> Result<(), PlayerNetworkingError<T>> {
         self.transport
@@ -206,19 +223,32 @@ impl<T: MessageTransport> PlayerNetworking<T> {
     }
 
     /// Dequeues a game packet for a given remote.
+    pub fn dequeue_raw_packet(&self) -> Option<InboundRawPacket> {
+        self.raw_inbound.pop()
+    }
+
+    /// Dequeues a game packet for a given remote.
     pub fn dequeue_game_packet(
         &self,
-        remote: &SteamId,
+        remote: u64,
         packet_type: u8,
     ) -> Result<Option<Vec<u8>>, PlayerNetworkingError<T>> {
         self.sessions
             .read()
-            .map(|m| m.get(remote)?.inbound[packet_type as usize].pop())
+            .map(|m| m.get(&remote)?.inbound[packet_type as usize].pop())
             .map_err(|_| PlayerNetworkingError::SessionMapPoison)
     }
 
+    /// Check if the specified remote party is on disconnect cooldown.
+    pub fn remote_in_cooldown(&self, remote: u64) -> bool {
+        self.disconnects
+            .read()
+            .unwrap()
+            .contains_key(&remote)
+    }
+
     /// Clears out residual data for a player session.
-    pub fn remove_session(&self, remote: &SteamId) -> Result<(), PlayerNetworkingError<T>> {
+    pub fn remove_session(&self, remote: u64) -> Result<(), PlayerNetworkingError<T>> {
         {
             self.disconnects
                 .write()
@@ -232,7 +262,7 @@ impl<T: MessageTransport> PlayerNetworking<T> {
             .sessions
             .write()
             .map_err(|_| PlayerNetworkingError::SessionMapPoison)?
-            .remove(remote)
+            .remove(&remote)
         {
             self.transport.close(remote).unwrap();
         }
@@ -260,8 +290,9 @@ impl PlayerNetworkingSession {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Message {
+    RawPacket(i32, Vec<u8>),
     /// Packet originating from the game.
-    Packet(u8, Vec<u8>),
+    GamePacket(u8, Vec<u8>),
     /// Latency ping. Sent to kick-off latency probing.
     LatencyPing(LatencySequence),
     /// Latency pong. Sent in reply to the ping.
@@ -270,41 +301,51 @@ pub enum Message {
 
 impl Message {
     /// Determines the appropriate reliability and nagle layer properties for a given message.
-    pub fn send_flags(&self) -> SendFlags {
+    pub fn send_flags(&self) -> i32 {
         match self {
+            Message::RawPacket(_, _) => k_nSteamNetworkingSend_Reliable,
+
             // TODO: figure out more packet types and determine appropriate send flags.
-            Message::Packet(packet_type, _) => match packet_type {
-                1 => SendFlags::UNRELIABLE_NO_NAGLE,
-                4 => SendFlags::UNRELIABLE_NO_NAGLE,
-                7 => SendFlags::RELIABLE,
-                8 => SendFlags::RELIABLE,
-                10 => SendFlags::RELIABLE,
-                12 => SendFlags::UNRELIABLE_NO_NAGLE,
-                13 => SendFlags::UNRELIABLE_NO_NAGLE,
-                14 => SendFlags::UNRELIABLE_NO_NAGLE,
-                16 => SendFlags::UNRELIABLE_NO_NAGLE,
-                20 => SendFlags::RELIABLE,
-                24 => SendFlags::UNRELIABLE_NO_NAGLE,
-                26 => SendFlags::RELIABLE,
-                31 => SendFlags::RELIABLE,
-                34 => SendFlags::RELIABLE,
-                38 => SendFlags::RELIABLE,
-                45 => SendFlags::RELIABLE,
-                63 => SendFlags::RELIABLE,
-                78 => SendFlags::RELIABLE,
-                79 => SendFlags::RELIABLE,
-                82 => SendFlags::RELIABLE,
-                83 => SendFlags::RELIABLE,
-                105 => SendFlags::RELIABLE,
-                106 => SendFlags::RELIABLE,
-                107 => SendFlags::RELIABLE,
-                112 => SendFlags::UNRELIABLE_NO_NAGLE,
-                250 => SendFlags::RELIABLE,
-                _ => SendFlags::RELIABLE,
+            #[cfg(feature = "eldenring")]
+            Message::GamePacket(packet_type, _) => match packet_type {
+                1 => k_nSteamNetworkingSend_UnreliableNoNagle,
+                4 => k_nSteamNetworkingSend_UnreliableNoNagle,
+                7 => k_nSteamNetworkingSend_Reliable,
+                8 => k_nSteamNetworkingSend_Reliable,
+                10 => k_nSteamNetworkingSend_Reliable,
+                12 => k_nSteamNetworkingSend_UnreliableNoNagle,
+                13 => k_nSteamNetworkingSend_UnreliableNoNagle,
+                14 => k_nSteamNetworkingSend_UnreliableNoNagle,
+                16 => k_nSteamNetworkingSend_UnreliableNoNagle,
+                20 => k_nSteamNetworkingSend_Reliable,
+                24 => k_nSteamNetworkingSend_UnreliableNoNagle,
+                26 => k_nSteamNetworkingSend_Reliable,
+                31 => k_nSteamNetworkingSend_Reliable,
+                34 => k_nSteamNetworkingSend_Reliable,
+                38 => k_nSteamNetworkingSend_Reliable,
+                45 => k_nSteamNetworkingSend_Reliable,
+                63 => k_nSteamNetworkingSend_Reliable,
+                78 => k_nSteamNetworkingSend_Reliable,
+                79 => k_nSteamNetworkingSend_Reliable,
+                82 => k_nSteamNetworkingSend_Reliable,
+                83 => k_nSteamNetworkingSend_Reliable,
+                105 => k_nSteamNetworkingSend_Reliable,
+                106 => k_nSteamNetworkingSend_Reliable,
+                107 => k_nSteamNetworkingSend_Reliable,
+                112 => k_nSteamNetworkingSend_UnreliableNoNagle,
+                250 => k_nSteamNetworkingSend_Reliable,
+                _ => k_nSteamNetworkingSend_Reliable,
             },
 
-            Message::LatencyPing(_) => SendFlags::UNRELIABLE_NO_NAGLE,
-            Message::LatencyPong(_) => SendFlags::UNRELIABLE_NO_NAGLE,
+            #[cfg(feature = "armoredcore6")]
+            Message::GamePacket(packet_type, _) => match packet_type {
+                1 => k_nSteamNetworkingSend_UnreliableNoNagle,
+                23 => k_nSteamNetworkingSend_UnreliableNoNagle,
+                _ => k_nSteamNetworkingSend_Reliable,
+            },
+
+            Message::LatencyPing(_) => k_nSteamNetworkingSend_UnreliableNoNagle,
+            Message::LatencyPong(_) => k_nSteamNetworkingSend_UnreliableNoNagle,
         }
     }
 }
@@ -314,15 +355,15 @@ pub trait MessageTransport {
     type TransportError: std::error::Error + 'static;
 
     /// Sends a singular message to a given remote.
-    fn send(&self, remote: &SteamId, message: &Message) -> Result<(), Self::TransportError>;
+    fn send(&self, remote: u64, message: &Message) -> Result<(), Self::TransportError>;
 
     /// Retrieves all messages from transport.
     fn receive(
         &self,
-    ) -> Vec<Result<(SteamId, Result<Message, Self::TransportError>), Self::TransportError>>;
+    ) -> Vec<Result<(u64, Result<Message, Self::TransportError>), Self::TransportError>>;
 
     /// Closes the transport.
-    fn close(&self, remote: &SteamId) -> Result<(), Self::TransportError>;
+    fn close(&self, remote: u64) -> Result<(), Self::TransportError>;
 }
 
 #[derive(Debug, Error)]
@@ -339,14 +380,14 @@ pub enum SteamMessageError {
 
 pub struct SteamMessageTransport {
     /// Determines the messages channel used for communication.
-    messages_channel: u32,
+    messages_channel: i32,
 
     /// Holds the steam client.
     client: Client<ClientManager>,
 }
 
 impl SteamMessageTransport {
-    pub fn new(messages_channel: u32, client: Client<ClientManager>) -> Self {
+    pub fn new(messages_channel: i32, client: Client<ClientManager>) -> Self {
         Self {
             messages_channel,
             client,
@@ -357,26 +398,36 @@ impl SteamMessageTransport {
 impl MessageTransport for SteamMessageTransport {
     type TransportError = SteamMessageError;
 
-    fn send(&self, remote: &SteamId, message: &Message) -> Result<(), Self::TransportError> {
-        let identity = NetworkingIdentity::new_steam_id(*remote);
+    fn send(&self, remote: u64, message: &Message) -> Result<(), Self::TransportError> {
         let data = bincode::serialize(message)?;
 
-        self.client.networking_messages().send_message_to_user(
-            identity,
-            message.send_flags() | SendFlags::AUTO_RESTART_BROKEN_SESSION,
-            &data,
-            self.messages_channel,
-        )?;
+        unsafe {
+            SteamAPI_ISteamNetworkingMessages_SendMessageToUser(
+                SteamAPI_SteamNetworkingMessages_SteamAPI_v002() as _,
+                &networking_identity(remote),
+                data.as_ptr() as _,
+                data.len() as u32,
+                message.send_flags() | k_nSteamNetworkingSend_AutoRestartBrokenSession,
+                self.messages_channel,
+            );
+        }
+
+        // self.client.networking_messages().send_message_to_user(
+        //     identity,
+        //     message.send_flags() | SendFlags::AUTO_RESTART_BROKEN_SESSION,
+        //     &data,
+        //     self.messages_channel as u32,
+        // )?;
 
         Ok(())
     }
 
     fn receive(
         &self,
-    ) -> Vec<Result<(SteamId, Result<Message, Self::TransportError>), Self::TransportError>> {
+    ) -> Vec<Result<(u64, Result<Message, Self::TransportError>), Self::TransportError>> {
         self.client
             .networking_messages()
-            .receive_messages_on_channel(self.messages_channel, PACKET_BATCH_SIZE)
+            .receive_messages_on_channel(self.messages_channel as u32, PACKET_BATCH_SIZE)
             .iter()
             .map(|m| {
                 let message =
@@ -387,23 +438,17 @@ impl MessageTransport for SteamMessageTransport {
                     .steam_id()
                     .ok_or(SteamMessageError::IdentityNotASteamId)?;
 
-                Ok((steam_id, message))
+                Ok((steam_id.raw(), message))
             })
             .collect()
     }
 
-    fn close(&self, remote: &SteamId) -> Result<(), Self::TransportError> {
+    fn close(&self, remote: u64) -> Result<(), Self::TransportError> {
         // Why the fuck isn't this in steamworks as an explicit fn?
         unsafe {
             let messages = SteamAPI_SteamNetworkingMessages_SteamAPI_v002();
-            let identity = SteamNetworkingIdentity {
-                m_eType: ESteamNetworkingIdentityType::k_ESteamNetworkingIdentityType_SteamID,
-                m_cbSize: 0,
-                __bindgen_anon_1: SteamNetworkingIdentity__bindgen_ty_2 {
-                    m_steamID64: remote.raw(),
-                },
-            };
 
+            let identity = networking_identity(remote);
             SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser(messages, &identity as _);
         }
 
@@ -414,7 +459,6 @@ impl MessageTransport for SteamMessageTransport {
 #[cfg(test)]
 mod test {
     use crossbeam::queue::ArrayQueue;
-    use steamworks::SteamId;
     use thiserror::Error;
 
     use super::{Message, MessageTransport, PlayerNetworking};
@@ -424,12 +468,12 @@ mod test {
 
     #[derive(Debug)]
     struct MockMessageTransport {
-        inbound: Vec<(SteamId, Message)>,
-        outbound: ArrayQueue<(SteamId, Message)>,
+        inbound: Vec<(u64, Message)>,
+        outbound: ArrayQueue<(u64, Message)>,
     }
 
     impl MockMessageTransport {
-        pub fn new(inbound: Vec<(SteamId, Message)>) -> Self {
+        pub fn new(inbound: Vec<(u64, Message)>) -> Self {
             Self {
                 inbound,
                 outbound: ArrayQueue::new(0x10),
@@ -442,7 +486,7 @@ mod test {
 
         fn send(
             &self,
-            remote: &steamworks::SteamId,
+            remote: u64,
             message: &super::Message,
         ) -> Result<(), Self::TransportError> {
             self.outbound.push((*remote, message.clone())).unwrap();
@@ -451,7 +495,7 @@ mod test {
 
         fn receive(
             &self,
-        ) -> Vec<Result<(SteamId, Result<Message, Self::TransportError>), Self::TransportError>>
+        ) -> Vec<Result<(u64, Result<Message, Self::TransportError>), Self::TransportError>>
         {
             self.inbound
                 .iter()
@@ -459,7 +503,7 @@ mod test {
                 .collect()
         }
 
-        fn close(&self, _remote: &SteamId) -> Result<(), Self::TransportError> {
+        fn close(&self, _remote: u64) -> Result<(), Self::TransportError> {
             Ok(())
         }
     }
@@ -467,13 +511,13 @@ mod test {
     #[test]
     /// Verify that messages from transport containing a game packet are dequeuable as game packets.
     fn can_read_incoming_game_packets() {
-        let gaben = SteamId::from_raw(76561197960287930);
-        let johncena = SteamId::from_raw(76561197963843357);
+        let gaben = 76561197960287930;
+        let johncena = 76561197963843357;
 
         let transport = MockMessageTransport::new(vec![
-            (gaben, Message::Packet(0x12, vec![0x12])),
-            (johncena, Message::Packet(0x08, vec![0x34])),
-            (gaben, Message::Packet(0x12, vec![0x56])),
+            (gaben, Message::GamePacket(0x12, vec![0x12])),
+            (johncena, Message::GamePacket(0x08, vec![0x34])),
+            (gaben, Message::GamePacket(0x12, vec![0x56])),
         ]);
 
         let networking = PlayerNetworking::new(transport);
@@ -503,18 +547,18 @@ mod test {
     /// Attempts to verify that no reordering of the messages happens compared to how they came in
     /// from the transport.
     fn incoming_game_packet_order_is_consistent() {
-        let gaben = SteamId::from_raw(76561197960287930);
+        let gaben = 76561197960287930;
 
         let transport = MockMessageTransport::new(vec![
-            (gaben, Message::Packet(0x12, vec![0x01])),
-            (gaben, Message::Packet(0x12, vec![0x02])),
-            (gaben, Message::Packet(0x12, vec![0x03])),
-            (gaben, Message::Packet(0x12, vec![0x04])),
-            (gaben, Message::Packet(0x12, vec![0x05])),
-            (gaben, Message::Packet(0x12, vec![0x06])),
-            (gaben, Message::Packet(0x12, vec![0x07])),
-            (gaben, Message::Packet(0x12, vec![0x08])),
-            (gaben, Message::Packet(0x12, vec![0x09])),
+            (gaben, Message::GamePacket(0x12, vec![0x01])),
+            (gaben, Message::GamePacket(0x12, vec![0x02])),
+            (gaben, Message::GamePacket(0x12, vec![0x03])),
+            (gaben, Message::GamePacket(0x12, vec![0x04])),
+            (gaben, Message::GamePacket(0x12, vec![0x05])),
+            (gaben, Message::GamePacket(0x12, vec![0x06])),
+            (gaben, Message::GamePacket(0x12, vec![0x07])),
+            (gaben, Message::GamePacket(0x12, vec![0x08])),
+            (gaben, Message::GamePacket(0x12, vec![0x09])),
         ]);
 
         let networking = PlayerNetworking::new(transport);
@@ -561,13 +605,13 @@ mod test {
     #[test]
     /// Verify that sent messages are passed on to the transport
     fn send_calls_transport() {
-        let gaben = SteamId::from_raw(76561197960287930);
+        let gaben = 76561197960287930;
 
         let transport = MockMessageTransport::new(vec![]);
         let networking = PlayerNetworking::new(transport);
 
         networking
-            .send_message(&gaben, &Message::Packet(0x12, vec![0x34]))
+            .send_message(&gaben, &Message::GamePacket(0x12, vec![0x34]))
             .unwrap();
 
         let message = networking
@@ -577,15 +621,16 @@ mod test {
             .expect("Could not pop sent message");
 
         assert_eq!(gaben, message.0);
-        assert_eq!(Message::Packet(0x12, vec![0x34]), message.1);
+        assert_eq!(Message::GamePacket(0x12, vec![0x34]), message.1);
     }
 
     #[test]
     /// Verify that the game can no longer dequeue packets after a session has ended.
     fn disconnect_prevents_game_packet_dequeueing() {
-        let gaben = SteamId::from_raw(76561197960287930);
+        let gaben = 76561197960287930;
 
-        let transport = MockMessageTransport::new(vec![(gaben, Message::Packet(0x12, vec![0x01]))]);
+        let transport =
+            MockMessageTransport::new(vec![(gaben, Message::GamePacket(0x12, vec![0x01]))]);
 
         let networking = PlayerNetworking::new(transport);
         networking.update();
