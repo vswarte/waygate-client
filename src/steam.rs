@@ -2,14 +2,14 @@ use std::{ffi::c_void, mem::transmute};
 
 use retour::static_detour;
 use steamworks_sys::{
-    CSteamID, EP2PSend, ESteamNetworkingIdentityType, SteamAPI_ISteamUser_GetAuthSessionTicket, SteamAPI_ISteamUser_GetSteamID, SteamAPI_RegisterCallback, SteamAPI_SteamNetworkingIdentity_Clear, SteamAPI_SteamNetworkingIdentity_SetSteamID, SteamAPI_SteamNetworking_v006, SteamAPI_SteamUser_v021, SteamNetworkingIdentity, SteamNetworkingIdentity__bindgen_ty_2
+    EP2PSend, ESteamNetworkingIdentityType, SteamAPI_ISteamUser_GetAuthSessionTicket, SteamAPI_ISteamUser_GetSteamID, SteamAPI_RegisterCallback, SteamAPI_SteamNetworkingIdentity_Clear, SteamAPI_SteamNetworkingIdentity_SetSteamID, SteamAPI_SteamNetworking_v006, SteamAPI_SteamUser_v021, SteamNetworkingIdentity, SteamNetworkingIdentity__bindgen_ty_2
 };
 use vtable_rs::{vtable, VPtr};
 use windows::Win32::System::Memory::{
     VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS,
 };
 
-use crate::{p2p::Message, P2P_MESSAGES_CHANNEL, PLAYER_NETWORKING};
+use crate::{p2p::Message, PLAYER_NETWORKING};
 
 static_detour! {
     static STEAM_SEND_P2P_PACKET: extern "C" fn(
@@ -313,13 +313,13 @@ where
 {
     extern "C" fn run(&mut self, data: *const c_void) {
         unsafe {
-            (self.closure)(std::mem::transmute(data));
+            (self.closure)(&*(data as *const D));
         }
     }
 
     extern "C" fn run_other(&mut self, data: *const c_void, _p3: u64, _p4: bool) {
         unsafe {
-            (self.closure)(std::mem::transmute(data));
+            (self.closure)(&*(data as *const D));
         }
     }
 

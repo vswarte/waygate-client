@@ -10,11 +10,10 @@ use crossbeam::queue::ArrayQueue;
 use latency::{LatencySequence, LatencyTracker};
 use serde::{Deserialize, Serialize};
 use steamworks::{
-    networking_types::{NetworkingIdentity, SendFlags},
     Client, ClientManager,
 };
 use steamworks_sys::{
-    k_nSteamNetworkingSend_AutoRestartBrokenSession, k_nSteamNetworkingSend_Reliable, k_nSteamNetworkingSend_UnreliableNoNagle, ESteamNetworkingIdentityType, SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser, SteamAPI_ISteamNetworkingMessages_SendMessageToUser, SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamAPI_SteamNetworking_v006, SteamNetworkingIdentity, SteamNetworkingIdentity__bindgen_ty_2
+    k_nSteamNetworkingSend_AutoRestartBrokenSession, k_nSteamNetworkingSend_Reliable, k_nSteamNetworkingSend_UnreliableNoNagle, SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser, SteamAPI_ISteamNetworkingMessages_SendMessageToUser, SteamAPI_SteamNetworkingMessages_SteamAPI_v002
 };
 use thiserror::Error;
 
@@ -253,7 +252,7 @@ impl<T: MessageTransport> PlayerNetworking<T> {
             self.disconnects
                 .write()
                 .map_err(|_| PlayerNetworkingError::DisconnectMapPoison)?
-                .insert(remote.clone(), Instant::now());
+                .insert(remote, Instant::now());
             tracing::info!("Added closed connection to ignore map");
         }
 
