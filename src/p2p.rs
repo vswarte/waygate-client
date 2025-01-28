@@ -1,5 +1,3 @@
-mod latency;
-
 use std::{
     collections::{hash_map::Entry, HashMap},
     sync::RwLock,
@@ -7,7 +5,6 @@ use std::{
 };
 
 use crossbeam::queue::ArrayQueue;
-use latency::{LatencySequence, LatencyTracker};
 use serde::{Deserialize, Serialize};
 use steamworks::{
     Client, ClientManager,
@@ -35,14 +32,10 @@ pub enum PlayerNetworkingError<T: MessageTransport> {
     SessionMapPoison,
     #[error("Disconnect map lock poisoned")]
     DisconnectMapPoison,
-    #[error("Latency tracker lock poisoned")]
-    LatencyTrackerPoison,
     #[error("Player packet queue has reached its bounds. packet_type = {0}")]
     PacketQueueBounds(u8),
     #[error("Transport error. {0}")]
     Transport(T::TransportError),
-    #[error("Latency tracking error.")]
-    LatencyTracking,
     #[error("Unknown lobby participant")]
     UnknownParticipant,
 }
@@ -74,28 +67,9 @@ impl<T: MessageTransport> PlayerNetworking<T> {
         }
     }
 
-    /// Updates the PlayerNetworking structure, sends out any latency probes, pumps and handles the
+    /// Updates the PlayerNetworking structure, pumps and handles the
     /// received messages and pushes inbound game packets to their respective queues.
     pub fn update(&self) -> Result<(), PlayerNetworkingError<T>> {
-        for (remote, session) in self
-            .sessions
-            .read()
-            .map_err(|_| PlayerNetworkingError::SessionMapPoison)?
-            .iter()
-        {
-            let mut tracker = session
-                .latency
-                .write()
-                .map_err(|_| PlayerNetworkingError::LatencyTrackerPoison)?;
-
-            if tracker.should_send_probe() {
-                let seq = tracker.start_probe();
-                if let Err(e) = self.transport.send(*remote, &Message::LatencyPing(seq)) {
-                    tracing::error!("Could not send latency probe to other player. e = {e}");
-                }
-            }
-        }
-
         // Pump incoming messages
         for message in self.transport.receive().iter() {
             match message {
@@ -134,7 +108,7 @@ impl<T: MessageTransport> PlayerNetworking<T> {
     }
 
     /// Handles receiving of a message for a given remote player. This handles both received game
-    /// packets as well as meta stuff like the latency probes.
+    /// packets as well.
     fn handle_message(
         &self,
         remote: u64,
@@ -191,19 +165,6 @@ impl<T: MessageTransport> PlayerNetworking<T> {
                 session.inbound[*packet_type as usize]
                     .push(data.clone())
                     .map_err(|_| PlayerNetworkingError::PacketQueueBounds(*packet_type))?;
-            }
-            Message::LatencyPing(seq) => {
-                self.transport
-                    .send(remote, &Message::LatencyPong(*seq))
-                    .unwrap();
-            }
-            Message::LatencyPong(seq) => {
-                session
-                    .latency
-                    .write()
-                    .ok()
-                    .ok_or(PlayerNetworkingError::LatencyTracking)?
-                    .end_probe(*seq);
             }
         }
 
@@ -274,14 +235,11 @@ impl<T: MessageTransport> PlayerNetworking<T> {
 pub struct PlayerNetworkingSession {
     /// Host the inbound packets for the session with this player.
     inbound: [ArrayQueue<Vec<u8>>; u8::MAX as usize],
-    /// Tracks latency for a given connection.
-    latency: RwLock<LatencyTracker>,
 }
 
 impl PlayerNetworkingSession {
     pub fn new() -> Self {
         Self {
-            latency: RwLock::new(LatencyTracker::new()),
             inbound: std::array::from_fn(|_| ArrayQueue::new(PACKET_QUEUE_CAPACITY)),
         }
     }
@@ -292,10 +250,6 @@ pub enum Message {
     RawPacket(i32, Vec<u8>),
     /// Packet originating from the game.
     GamePacket(u8, Vec<u8>),
-    /// Latency ping. Sent to kick-off latency probing.
-    LatencyPing(LatencySequence),
-    /// Latency pong. Sent in reply to the ping.
-    LatencyPong(LatencySequence),
 }
 
 impl Message {
@@ -342,9 +296,6 @@ impl Message {
                 23 => k_nSteamNetworkingSend_UnreliableNoNagle,
                 _ => k_nSteamNetworkingSend_Reliable,
             },
-
-            Message::LatencyPing(_) => k_nSteamNetworkingSend_UnreliableNoNagle,
-            Message::LatencyPong(_) => k_nSteamNetworkingSend_UnreliableNoNagle,
         }
     }
 }
