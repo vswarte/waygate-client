@@ -6,6 +6,7 @@ mod p2p;
 mod steam;
 
 mod singleton;
+mod system;
 mod task;
 
 use std::{
@@ -14,7 +15,6 @@ use std::{
     ptr::copy_nonoverlapping,
     sync::{Arc, OnceLock},
     thread::spawn,
-    time::Duration,
 };
 
 pub use config::Config;
@@ -30,6 +30,7 @@ use steamworks_sys::{
     SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser,
     SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamNetworkingMessagesSessionRequest_t,
 };
+use system::wait_for_system_init;
 use task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
 use thiserror::Error;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
@@ -86,8 +87,7 @@ pub unsafe fn init(config: Config) {
     // task for our own message pump, such that it runs in lock-step with the
     // game's packet poll.
     spawn(move || {
-        // TODO: waiting for 5s is a race condition, need to actually await CSTask
-        std::thread::sleep(Duration::from_secs(5));
+        wait_for_system_init(5000).unwrap();
 
         // Handle any message session requests.
         steam::register_callback(1251, |request: &SteamNetworkingMessagesSessionRequest_t| {
@@ -364,7 +364,9 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
 
     // Retool the FSDP layer packets to also use steams new messaging API.
     #[cfg(feature = "eldenring")]
-    unsafe { steam::set_hooks() };
+    unsafe {
+        steam::set_hooks()
+    };
 
     unsafe {
         let player_networking = player_networking.clone();

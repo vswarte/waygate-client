@@ -1,12 +1,12 @@
-use std::sync::Arc;
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::singleton::DLRFLocatable;
-use pelite::pe::{Pe, PeView};
 use pelite::pattern::Atom;
-use windows::{core::PCSTR, Win32::System::LibraryLoader::GetModuleHandleA};
+use pelite::pe::{Pe, PeView};
 use std::sync::LazyLock;
+use windows::{core::PCSTR, Win32::System::LibraryLoader::GetModuleHandleA};
 
 pub trait TaskRuntime {
     fn run_task<T: Into<FD4Task>>(&self, execute: T, group: CSTaskGroupIndex) -> TaskHandle;
@@ -98,7 +98,7 @@ impl FD4TaskVMT for FD4Task {
     extern "C" fn execute(&mut self, data: &FD4TaskData) {
         // Should we stop before run?
         // if !self.unregister_requested.load(Ordering::Relaxed) {
-            (self.closure)(data);
+        (self.closure)(data);
         // }
 
         // Drop if we got cancelled during run.

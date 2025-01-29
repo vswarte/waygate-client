@@ -76,6 +76,8 @@ const NULL_CHECK_PATTERN: &str = concat!(
 /// instance's static, a pointer to the reflection metadata and a pointer to
 /// the get_singleton_name fn. Once all checks out we call get_singleton_name
 /// with the metadata to obtain the instance's type name.
+/// WARNING: This shouldn't be called before the game has finished initializing.
+/// Use wait_for_system_init to ensure all singletons are initialized.
 pub fn build_singleton_table(program: &PeView) -> Result<SingletonMap, SingletonMapError> {
     let text_range = program
         .section_headers()
