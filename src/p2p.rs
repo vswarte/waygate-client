@@ -433,7 +433,7 @@ mod test {
         type TransportError = MockMessageError;
 
         fn send(&self, remote: u64, message: &super::Message) -> Result<(), Self::TransportError> {
-            self.outbound.push((*remote, message.clone())).unwrap();
+            self.outbound.push((remote, message.clone())).unwrap();
             Ok(())
         }
 
@@ -465,23 +465,23 @@ mod test {
         ]);
 
         let networking = PlayerNetworking::new(transport);
-        networking.update();
+        networking.update().unwrap();
 
         // Retrieve the packets like the game would
         let first = networking
-            .dequeue_game_packet(&gaben, 0x12)
+            .dequeue_game_packet(gaben, 0x12)
             .expect("Session error")
             .expect("Did not receive game packet");
         assert_eq!(vec![0x12], first);
 
         let second = networking
-            .dequeue_game_packet(&gaben, 0x12)
+            .dequeue_game_packet(gaben, 0x12)
             .expect("Session error")
             .expect("Did not receive game packet");
         assert_eq!(vec![0x56], second);
 
         let third = networking
-            .dequeue_game_packet(&johncena, 0x08)
+            .dequeue_game_packet(johncena, 0x08)
             .expect("Session error")
             .expect("Did not receive game packet");
         assert_eq!(vec![0x34], third);
@@ -506,43 +506,43 @@ mod test {
         ]);
 
         let networking = PlayerNetworking::new(transport);
-        networking.update();
+        networking.update().unwrap();
 
         assert_eq!(
             Some(vec![0x01]),
-            networking.dequeue_game_packet(&gaben, 0x12).unwrap()
+            networking.dequeue_game_packet(gaben, 0x12).unwrap()
         );
         assert_eq!(
             Some(vec![0x02]),
-            networking.dequeue_game_packet(&gaben, 0x12).unwrap()
+            networking.dequeue_game_packet(gaben, 0x12).unwrap()
         );
         assert_eq!(
             Some(vec![0x03]),
-            networking.dequeue_game_packet(&gaben, 0x12).unwrap()
+            networking.dequeue_game_packet(gaben, 0x12).unwrap()
         );
         assert_eq!(
             Some(vec![0x04]),
-            networking.dequeue_game_packet(&gaben, 0x12).unwrap()
+            networking.dequeue_game_packet(gaben, 0x12).unwrap()
         );
         assert_eq!(
             Some(vec![0x05]),
-            networking.dequeue_game_packet(&gaben, 0x12).unwrap()
+            networking.dequeue_game_packet(gaben, 0x12).unwrap()
         );
         assert_eq!(
             Some(vec![0x06]),
-            networking.dequeue_game_packet(&gaben, 0x12).unwrap()
+            networking.dequeue_game_packet(gaben, 0x12).unwrap()
         );
         assert_eq!(
             Some(vec![0x07]),
-            networking.dequeue_game_packet(&gaben, 0x12).unwrap()
+            networking.dequeue_game_packet(gaben, 0x12).unwrap()
         );
         assert_eq!(
             Some(vec![0x08]),
-            networking.dequeue_game_packet(&gaben, 0x12).unwrap()
+            networking.dequeue_game_packet(gaben, 0x12).unwrap()
         );
         assert_eq!(
             Some(vec![0x09]),
-            networking.dequeue_game_packet(&gaben, 0x12).unwrap()
+            networking.dequeue_game_packet(gaben, 0x12).unwrap()
         );
     }
 
@@ -555,7 +555,7 @@ mod test {
         let networking = PlayerNetworking::new(transport);
 
         networking
-            .send_message(&gaben, &Message::GamePacket(0x12, vec![0x34]))
+            .send_message(gaben, &Message::GamePacket(0x12, vec![0x34]))
             .unwrap();
 
         let message = networking
@@ -577,8 +577,8 @@ mod test {
             MockMessageTransport::new(vec![(gaben, Message::GamePacket(0x12, vec![0x01]))]);
 
         let networking = PlayerNetworking::new(transport);
-        networking.update();
-        networking.remove_session(&gaben).unwrap();
-        assert_eq!(None, networking.dequeue_game_packet(&gaben, 0x12).unwrap());
+        networking.update().unwrap();
+        networking.remove_session(gaben).unwrap();
+        assert_eq!(None, networking.dequeue_game_packet(gaben, 0x12).unwrap());
     }
 }
