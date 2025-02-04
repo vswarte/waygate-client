@@ -6,6 +6,7 @@ mod p2p;
 mod steam;
 
 mod singleton;
+mod system;
 mod task;
 
 use std::{
@@ -14,7 +15,6 @@ use std::{
     ptr::copy_nonoverlapping,
     sync::{Arc, OnceLock},
     thread::spawn,
-    time::Duration,
 };
 
 pub use config::Config;
@@ -30,15 +30,18 @@ use steamworks_sys::{
     SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser,
     SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamNetworkingMessagesSessionRequest_t,
 };
+use system::wait_for_system_init;
 use task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
 use thiserror::Error;
-use tracing_panic::panic_hook;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::{
     core::{PCSTR, PCWSTR},
     s,
     Win32::Networking::WinHttp::WinHttpAddRequestHeaders,
 };
+
+#[cfg(not(feature = "lib"))]
+use tracing_panic::panic_hook;
 
 #[cfg(feature = "eldenring")]
 const APP_ID: u32 = 1245620;
@@ -84,8 +87,7 @@ pub unsafe fn init(config: Config) {
     // task for our own message pump, such that it runs in lock-step with the
     // game's packet poll.
     spawn(move || {
-        // TODO: waiting for 5s is a race condition, need to actually await CSTask
-        std::thread::sleep(Duration::from_secs(5));
+        wait_for_system_init(5000).unwrap();
 
         // Handle any message session requests.
         steam::register_callback(1251, |request: &SteamNetworkingMessagesSessionRequest_t| {
@@ -93,11 +95,7 @@ pub unsafe fn init(config: Config) {
 
             // Player just disconnected, we shouln't allow any messages in.
             let remote = unsafe { request.m_identityRemote.__bindgen_anon_1.m_steamID64 };
-            if PLAYER_NETWORKING
-                .get()
-                .unwrap()
-                .remote_in_cooldown(remote)
-            {
+            if PLAYER_NETWORKING.get().unwrap().remote_in_cooldown(remote) {
                 tracing::info!("Got message from remote on cooldown. remote = {remote}");
                 return;
             }
@@ -366,7 +364,9 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
 
     // Retool the FSDP layer packets to also use steams new messaging API.
     #[cfg(feature = "eldenring")]
-    unsafe { steam::set_hooks() };
+    unsafe {
+        steam::set_hooks()
+    };
 
     unsafe {
         let player_networking = player_networking.clone();
@@ -394,7 +394,9 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
                     }
 
                     let connection = connection.as_ref().unwrap();
-                    let packet = match player_networking.dequeue_game_packet(connection.steam_id, packet_type) {
+                    let packet = match player_networking
+                        .dequeue_game_packet(connection.steam_id, packet_type)
+                    {
                         Ok(message) => message.unwrap_or_default(),
                         Err(e) => {
                             tracing::error!("Could not dequeue game packet for player. e = {e}");
@@ -452,10 +454,9 @@ fn setup_p2p(module: &PeView) -> Result<(), InitError> {
                     let remote = *(steam_id.as_ref().unwrap());
                     let contents = std::slice::from_raw_parts(buffer, packet_size as usize);
 
-                    if let Err(e) = player_networking.send_message(
-                        remote,
-                        &Message::GamePacket(packet_type, contents.to_vec()),
-                    ) {
+                    if let Err(e) = player_networking
+                        .send_message(remote, &Message::GamePacket(packet_type, contents.to_vec()))
+                    {
                         tracing::error!("Could not send message to {remote:?}. e = {e}");
                         0
                     } else {

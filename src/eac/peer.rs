@@ -1,9 +1,9 @@
 use std::mem;
 use std::sync;
 use std::thread;
-use std::time;
 
 use crate::eac;
+use crate::system::wait_for_system_init;
 
 static PEER_AUTH_CALLBACK: sync::OnceLock<sync::Mutex<usize>> = sync::OnceLock::new();
 static PEER_AUTH_CLIENT_DATA: sync::OnceLock<sync::Mutex<usize>> = sync::OnceLock::new();
@@ -47,7 +47,7 @@ pub unsafe fn set_anticheatclient_registerpeer_hook(
             let client_handle = (*options).peer_handle;
 
             thread::spawn(move || {
-                thread::sleep(time::Duration::from_secs(1));
+                wait_for_system_init(10000).expect("System initialization timed out");
 
                 let notification_fn = *PEER_AUTH_CALLBACK.get_or_init(|| sync::Mutex::new(0)).lock().unwrap();
                 let client_data = *PEER_AUTH_CLIENT_DATA.get_or_init(|| sync::Mutex::new(0)).lock().unwrap() as u64;
