@@ -12,12 +12,14 @@ jobs:
         with:
           toolchain: nightly
           override: true
+
       - name: Build Release Mode
         uses: actions-rs/cargo@v1
         with:
           use-cross: true
           command: build
           args: --release --verbose
+
       - name: Archive
         uses: actions/upload-artifact@v3
         with:

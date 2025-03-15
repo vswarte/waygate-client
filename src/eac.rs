@@ -1,6 +1,6 @@
 use std::ffi::CString;
 
-use windows::core::PCSTR;
+use windows::core::{HSTRING, PCSTR, PCWSTR};
 use windows::w;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_FLAGS};
@@ -63,7 +63,7 @@ static_detour! {
     static HOOK_EOS_SHUTDOWN: fn() -> eos::EOS_EResult;
 }
 
-pub unsafe fn set_hooks() {
+pub unsafe fn hook() {
     load_eos_dll();
 
     hook::set_result_success_hook("EOS_Initialize", &HOOK_EOS_INITIALIZE);
