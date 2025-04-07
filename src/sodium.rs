@@ -1,7 +1,8 @@
 use std::{mem::transmute, ptr::copy_nonoverlapping, sync::Arc};
 
+use eldenring_util::program::Program;
 use pelite::pattern::Atom;
-use pelite::pe::{Pe, PeView};
+use pelite::pe::Pe;
 use retour::static_detour;
 
 use crate::{Config, InitError};
@@ -14,7 +15,7 @@ static_detour! {
 }
 
 /// Hooks libsodium's kx key derive so that we can swap out the preshared keys with our own.
-pub fn hook(module: &PeView, config: Arc<Config>) -> Result<(), InitError> {
+pub fn hook(module: &Program, config: Arc<Config>) -> Result<(), InitError> {
     let sodium_kx_derive_va = {
         let mut matches = [0u32; 1];
         if !module

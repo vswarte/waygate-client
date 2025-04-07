@@ -4,13 +4,19 @@ use crate::{steam, Config, InitError};
 
 use retour::static_detour;
 use windows::core::PCWSTR;
-use windows::s;
-use windows::Win32::Networking::WinHttp::WinHttpAddRequestHeaders;
+use windows::core::s;
+use windows::Win32::Networking::WinHttp::{
+    WinHttpAddRequestHeaders, WINHTTP_FLAG_SECURE, WINHTTP_OPEN_REQUEST_FLAGS,
+};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+
+type WinhttpOpenRequestT =
+    fn(usize, usize, usize, usize, usize, usize, WINHTTP_OPEN_REQUEST_FLAGS) -> usize;
+type WinhttpConnectT = fn(usize, PCWSTR, usize, usize) -> usize;
 
 static_detour! {
     static WINHTTP_CONNECT: fn(usize, PCWSTR, usize, usize) -> usize;
-    static WINHTTP_OPEN_REQUEST: fn(usize, usize, usize, usize, usize, usize, usize) -> usize;
+    static WINHTTP_OPEN_REQUEST: fn(usize, usize, usize, usize, usize, usize, WINHTTP_OPEN_REQUEST_FLAGS) -> usize;
 }
 
 /// Hooks WinHTTP to redirect to a given server as well as inject some extra data about the client
@@ -33,7 +39,7 @@ pub fn hook(config: Arc<Config>) -> Result<(), InitError> {
         // Hook WinHttpConnect to swap out the destination hostname and the port.
         WINHTTP_CONNECT
             .initialize(
-                transmute(winhttp_connect_va),
+                transmute::<usize, WinhttpConnectT>(winhttp_connect_va),
                 move |session: usize, _hostname: PCWSTR, _port: usize, reserved: usize| {
                     tracing::info!("Swapping details for request connect");
 
@@ -61,15 +67,21 @@ pub fn hook(config: Arc<Config>) -> Result<(), InitError> {
         // the websocket upgrade request.
         WINHTTP_OPEN_REQUEST
             .initialize(
-                transmute(winhttp_open_request_va),
+                transmute::<usize, WinhttpOpenRequestT>(winhttp_open_request_va),
                 move |connect: usize,
                       verb: usize,
                       object_name: usize,
                       version: usize,
                       referrer: usize,
                       accept_types: usize,
-                      _flags: usize| {
+                      _flags: WINHTTP_OPEN_REQUEST_FLAGS| {
                     tracing::info!("Swapping details for request open");
+
+                    let flags = if config.enable_ssl {
+                        WINHTTP_FLAG_SECURE
+                    } else {
+                        WINHTTP_OPEN_REQUEST_FLAGS::default()
+                    };
 
                     let request = WINHTTP_OPEN_REQUEST.call(
                         connect,
@@ -78,7 +90,7 @@ pub fn hook(config: Arc<Config>) -> Result<(), InitError> {
                         version,
                         referrer,
                         accept_types,
-                        0x0,
+                        flags,
                     );
 
                     // Unfortunately the games protocol uses encrypted app tickets
@@ -102,15 +114,15 @@ pub fn hook(config: Arc<Config>) -> Result<(), InitError> {
                             .encode_utf16()
                             .collect::<Vec<u16>>();
 
-                    WinHttpAddRequestHeaders(request as *mut c_void, &steam_id_header, 0x20000000);
+                    let _ = WinHttpAddRequestHeaders(request as *mut c_void, &steam_id_header, 0x20000000);
 
-                    WinHttpAddRequestHeaders(
+                    let _ = WinHttpAddRequestHeaders(
                         request as *mut c_void,
                         &session_ticket_header,
                         0x20000000,
                     );
 
-                    WinHttpAddRequestHeaders(request as *mut c_void, &client_version, 0x20000000);
+                    let _ = WinHttpAddRequestHeaders(request as *mut c_void, &client_version, 0x20000000);
 
                     request
                 },

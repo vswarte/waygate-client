@@ -16,6 +16,11 @@
 /// instead. It wont conflict with other mods and it prevents you from having to intercept your own
 /// networking such that the game doesn't try to handle it by accident.
 use connection::{Origin, PlayerConnection};
+use eldenring::{
+    cs::{CSTaskGroupIndex, CSTaskImp},
+    fd4::FD4TaskData,
+};
+use eldenring_util::{program::Program, singleton::get_instance, task::CSTaskImpExt};
 use queue::GamePacketQueue;
 use retour::static_detour;
 use std::{
@@ -26,21 +31,13 @@ use std::{
 
 use message::Message;
 use pelite::pattern::Atom;
-use pelite::pe::{Pe, PeView};
-use serde::{Deserialize, Serialize};
+use pelite::pe::Pe;
 use steamworks::{Client, ClientManager};
 use steamworks_sys::k_nSteamNetworkingSend_AutoRestartBrokenSession;
-use steamworks_sys::{
-    SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser,
-    SteamAPI_ISteamNetworkingMessages_SendMessageToUser,
-    SteamAPI_SteamNetworkingMessages_SteamAPI_v002,
-};
 use thiserror::Error;
 
-use crate::singleton::get_instance;
-use crate::steam::{self, networking_identity};
-use crate::task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
-use crate::{InitError, APP_ID};
+use crate::steam;
+use crate::InitError;
 
 mod connection;
 mod encryption;
@@ -108,7 +105,7 @@ const PACKET_BATCH_SIZE: usize = 0x10;
 /// How many packets do we expect in the queue on average for any distinct packet type?
 const PACKET_QUEUE_INITIAL_CAPACITY: usize = 255;
 
-pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
+pub fn hook(module: &Program, steam: Client) -> Result<(), InitError> {
     let messaging = Arc::new(SteamMessaging::new(steam));
     let game_packet_queue = Arc::new(GamePacketQueue::default());
     let (p2p_send_tx, p2p_send_rx) = channel();
@@ -211,14 +208,14 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
     unsafe { steam::hook(p2p_send_tx, p2p_receive_rx, close_tx) };
     let mut connections = HashMap::<u64, PlayerConnection>::new();
 
-    let cs_task = get_instance::<CSTaskImp>().unwrap().unwrap();
-    let task = cs_task.run_task(
+    let cs_task = unsafe { get_instance::<CSTaskImp>().unwrap().unwrap() };
+    let task = cs_task.run_recurring(
         move |_: &FD4TaskData| {
             // Process any pending session closes
             while let Ok(remote) = close_rx.try_recv() {
                 tracing::info!("Dropping session with {remote}");
                 connections.remove(&remote);
-                if let Err(e) = messaging.close(remote) {
+                if messaging.close(remote).is_err() {
                     tracing::error!("Could not close steam messaging session with {remote}");
                 }
             }

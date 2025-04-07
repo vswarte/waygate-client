@@ -2,30 +2,25 @@
 pub mod config;
 mod eac;
 mod p2p;
-mod singleton;
 mod sodium;
 mod steam;
-mod system;
-mod task;
 mod winhttp;
 
-use std::thread::sleep;
+pub use config::Config;
+use eldenring_util::program::Program;
+use eldenring_util::system::wait_for_system_init;
 use std::{sync::Arc, thread::spawn, time::Duration};
 
-pub use config::Config;
-use pelite::pe::PeView;
-use singleton::get_instance;
 use steamworks::Client;
 use steamworks_sys::{
     SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser,
     SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamNetworkingMessagesSessionRequest_t,
 };
-use system::wait_for_system_init;
-use task::CSTaskImp;
+
 use thiserror::Error;
+
+#[cfg(not(feature = "lib"))]
 use tracing_panic::panic_hook;
-use windows::core::PCSTR;
-use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 
 #[cfg(feature = "eldenring")]
 const APP_ID: u32 = 1245620;
@@ -38,9 +33,7 @@ pub unsafe fn init(config: Config) {
     tracing::debug!("Initing {config:#?}");
 
     // Who the fuck are we
-    let module = unsafe {
-        PeView::module(GetModuleHandleA(PCSTR(std::ptr::null())).unwrap().0 as *const u8)
-    };
+    let module = Program::current();
 
     // Disable EAC but trick the game into thinking it is running so that we can connect to
     // a server.
@@ -63,7 +56,6 @@ pub unsafe fn init(config: Config) {
         steam::register_callback(1251, |request: &SteamNetworkingMessagesSessionRequest_t| {
             tracing::info!("SteamNetworkingMessagesSessionRequest.");
 
-            let remote = unsafe { request.m_identityRemote.__bindgen_anon_1.m_steamID64 };
             if !SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser(
                 SteamAPI_SteamNetworkingMessages_SteamAPI_v002(),
                 &request.m_identityRemote,

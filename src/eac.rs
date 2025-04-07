@@ -1,9 +1,10 @@
 use std::ffi::CString;
 
-use windows::core::{HSTRING, PCSTR, PCWSTR};
-use windows::w;
+use windows::core::{w, PCSTR};
 use windows::Win32::Foundation::HANDLE;
-use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_FLAGS};
+use windows::Win32::System::LibraryLoader::{
+    GetModuleHandleW, GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_FLAGS,
+};
 
 use retour::static_detour;
 
@@ -12,8 +13,8 @@ pub(crate) fn resolve_eos_symbol(name: impl AsRef<str> + std::fmt::Display) -> u
         let module_handle = GetModuleHandleW(w!("eossdk-win64-shipping.dll")).unwrap();
 
         let symbol = CString::new(name.as_ref()).unwrap();
-        GetProcAddress(module_handle, PCSTR::from_raw(symbol.as_ptr() as *const u8))
-            .unwrap() as usize
+        GetProcAddress(module_handle, PCSTR::from_raw(symbol.as_ptr() as *const u8)).unwrap()
+            as usize
     }
 }
 
@@ -176,7 +177,7 @@ pub unsafe fn hook() {
 unsafe fn load_eos_dll() {
     LoadLibraryExW(
         w!("eossdk-win64-shipping.dll"),
-        HANDLE::default(),
+        Some(HANDLE::default()),
         LOAD_LIBRARY_FLAGS(0x00000001),
     )
     .expect("Could not load EOS SDK DLL");
