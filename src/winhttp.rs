@@ -3,14 +3,22 @@ use std::{ffi::c_void, mem::transmute, sync::Arc};
 use crate::{steam, Config, InitError};
 
 use retour::static_detour;
+use windows::core::s;
 use windows::core::PCWSTR;
-use windows::s;
-use windows::Win32::Networking::WinHttp::WinHttpAddRequestHeaders;
+use windows::Win32::Networking::WinHttp::WINHTTP_ADDREQ_FLAG_ADD;
+use windows::Win32::Networking::WinHttp::WINHTTP_ADDREQ_FLAG_REPLACE;
+use windows::Win32::Networking::WinHttp::{
+    WinHttpAddRequestHeaders, WINHTTP_FLAG_SECURE, WINHTTP_OPEN_REQUEST_FLAGS,
+};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 
+type WinhttpOpenRequestT =
+    fn(usize, PCWSTR, PCWSTR, PCWSTR, PCWSTR, PCWSTR, WINHTTP_OPEN_REQUEST_FLAGS) -> usize;
+type WinhttpConnectT = fn(usize, PCWSTR, u16, usize) -> usize;
+
 static_detour! {
-    static WINHTTP_CONNECT: fn(usize, PCWSTR, usize, usize) -> usize;
-    static WINHTTP_OPEN_REQUEST: fn(usize, usize, usize, usize, usize, usize, usize) -> usize;
+    static WINHTTP_CONNECT: fn(usize, PCWSTR, u16, usize) -> usize;
+    static WINHTTP_OPEN_REQUEST: fn(usize, PCWSTR, PCWSTR, PCWSTR, PCWSTR, PCWSTR, WINHTTP_OPEN_REQUEST_FLAGS) -> usize;
 }
 
 /// Hooks WinHTTP to redirect to a given server as well as inject some extra data about the client
@@ -29,31 +37,43 @@ pub fn hook(config: Arc<Config>) -> Result<(), InitError> {
 
     unsafe {
         let config = config.clone();
-
-        // Hook WinHttpConnect to swap out the destination hostname and the port.
         WINHTTP_CONNECT
             .initialize(
-                transmute(winhttp_connect_va),
-                move |session: usize, _hostname: PCWSTR, _port: usize, reserved: usize| {
-                    tracing::info!("Swapping details for request connect");
+                transmute::<usize, WinhttpConnectT>(winhttp_connect_va),
+                move |session, hostname, port, reserved| {
+                    let original_hostname_str = String::from_utf16_lossy(hostname.as_wide());
+                    let is_target_domain = original_hostname_str.contains("fromsoftware-game.net");
 
-                    let host = {
-                        let mut bytes = config.host.encode_utf16().collect::<Vec<_>>();
-                        bytes.push(0x0);
-                        bytes
-                    };
+                    let target_hostname_pcwstr;
+                    let target_port;
 
-                    WINHTTP_CONNECT.call(
-                        session,
-                        PCWSTR(host.as_ptr()),
-                        config.port as usize,
-                        reserved,
-                    )
+                    if is_target_domain {
+                        tracing::info!(
+                            "WinHttpConnect: Redirecting request from {} to {}:{}",
+                            original_hostname_str,
+                            config.host,
+                            config.port
+                        );
+
+                        target_hostname_pcwstr = PCWSTR(
+                            config
+                                .host
+                                .encode_utf16()
+                                .chain(std::iter::once(0x0))
+                                .collect::<Vec<u16>>()
+                                .as_ptr(),
+                        );
+                        target_port = config.port;
+                    } else {
+                        target_hostname_pcwstr = hostname;
+                        target_port = port;
+                    }
+
+                    WINHTTP_CONNECT.call(session, target_hostname_pcwstr, target_port, reserved)
                 },
             )?
             .enable()?;
     }
-
     unsafe {
         let config = config.clone();
 
@@ -61,15 +81,34 @@ pub fn hook(config: Arc<Config>) -> Result<(), InitError> {
         // the websocket upgrade request.
         WINHTTP_OPEN_REQUEST
             .initialize(
-                transmute(winhttp_open_request_va),
+                transmute::<usize, WinhttpOpenRequestT>(winhttp_open_request_va),
                 move |connect: usize,
-                      verb: usize,
-                      object_name: usize,
-                      version: usize,
-                      referrer: usize,
-                      accept_types: usize,
-                      _flags: usize| {
+                      verb: PCWSTR,
+                      object_name: PCWSTR,
+                      version: PCWSTR,
+                      referrer: PCWSTR,
+                      accept_types: PCWSTR,
+                      mut flags: WINHTTP_OPEN_REQUEST_FLAGS| {
                     tracing::info!("Swapping details for request open");
+
+                    // The only way we can detect that this is a websocket upgrade request
+                    // is by checking the verb, which is "GET", object name, which is "",
+                    // other options are null pointers and flags are WINHTTP_FLAG_SECURE
+                    if !verb.is_null()
+                        && verb.to_string().unwrap_or_default() == "GET"
+                        && !object_name.is_null()
+                        && object_name.to_string().unwrap_or_default() == ""
+                        && version.is_null()
+                        && referrer.is_null()
+                        && accept_types.is_null()
+                        && flags == WINHTTP_FLAG_SECURE
+                    {
+                        flags = if config.enable_ssl {
+                            WINHTTP_FLAG_SECURE
+                        } else {
+                            WINHTTP_OPEN_REQUEST_FLAGS::default()
+                        };
+                    }
 
                     let request = WINHTTP_OPEN_REQUEST.call(
                         connect,
@@ -78,7 +117,7 @@ pub fn hook(config: Arc<Config>) -> Result<(), InitError> {
                         version,
                         referrer,
                         accept_types,
-                        0x0,
+                        flags,
                     );
 
                     // Unfortunately the games protocol uses encrypted app tickets
@@ -86,12 +125,12 @@ pub fn hook(config: Arc<Config>) -> Result<(), InitError> {
                     // and attach it to the initial upgrade request.
                     let (steam_id, ticket) = steam::get_auth_ticket();
 
-                    let steam_id_header = format!("X-STEAM-ID: {}", steam_id)
+                    let steam_id_header = format!("X-STEAM-ID: {steam_id}")
                         .encode_utf16()
                         .collect::<Vec<u16>>();
 
                     let session_ticket_header =
-                        format!("X-STEAM-SESSION-TICKET: {}", bytes_to_hex(ticket))
+                        format!("X-STEAM-SESSION-TICKET: {}", bytes_to_hex(&ticket))
                             .encode_utf16()
                             .collect::<Vec<u16>>();
 
@@ -102,15 +141,23 @@ pub fn hook(config: Arc<Config>) -> Result<(), InitError> {
                             .encode_utf16()
                             .collect::<Vec<u16>>();
 
-                    WinHttpAddRequestHeaders(request as *mut c_void, &steam_id_header, 0x20000000);
-
-                    WinHttpAddRequestHeaders(
+                    let _ = WinHttpAddRequestHeaders(
                         request as *mut c_void,
-                        &session_ticket_header,
-                        0x20000000,
+                        &steam_id_header,
+                        WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE,
                     );
 
-                    WinHttpAddRequestHeaders(request as *mut c_void, &client_version, 0x20000000);
+                    let _ = WinHttpAddRequestHeaders(
+                        request as *mut c_void,
+                        &session_ticket_header,
+                        WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE,
+                    );
+
+                    let _ = WinHttpAddRequestHeaders(
+                        request as *mut c_void,
+                        &client_version,
+                        WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE,
+                    );
 
                     request
                 },
@@ -122,27 +169,10 @@ pub fn hook(config: Arc<Config>) -> Result<(), InitError> {
     Ok(())
 }
 
-// Too lazy to write something good for this
-fn bytes_to_hex(input: Vec<u8>) -> String {
-    fn byte_to_hex(byte: u8) -> (u8, u8) {
-        static HEX_LUT: [u8; 16] = [
-            b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd',
-            b'e', b'f',
-        ];
-
-        let upper = HEX_LUT[(byte >> 4) as usize];
-        let lower = HEX_LUT[(byte & 0xF) as usize];
-        (lower, upper)
+fn bytes_to_hex(input: &[u8]) -> String {
+    let mut s = String::with_capacity(input.len() * 2);
+    for byte in input {
+        s.push_str(&format!("{byte:02x}"));
     }
-
-    let utf8_bytes: Vec<u8> = input
-        .iter()
-        .copied()
-        .flat_map(|byte| {
-            let (lower, upper) = byte_to_hex(byte);
-            [upper, lower]
-        })
-        .collect();
-
-    unsafe { String::from_utf8_unchecked(utf8_bytes) }
+    s
 }
