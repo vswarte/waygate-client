@@ -57,7 +57,7 @@ pub unsafe fn init(config: Config) {
     // task for our own message pump, such that it runs in lock-step with the
     // game's packet poll.
     spawn(move || {
-        wait_for_system_init(&module, Duration::from_secs(30)).unwrap();
+        wait_for_system_init(&module, Duration::MAX).unwrap();
 
         // Handle any message session requests.
         steam::register_callback(1251, |request: &SteamNetworkingMessagesSessionRequest_t| {
