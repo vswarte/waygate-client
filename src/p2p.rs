@@ -221,9 +221,6 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
                 tracing::info!("Dropping session with {remote}");
                 connections.remove(&remote);
                 game_packet_queue.remove(remote);
-                if let Err(e) = messaging.close(remote) {
-                    tracing::error!("Could not close steam messaging session with {remote}: {e}");
-                }
             }
 
             // Process incoming messages from remote parties.
@@ -349,10 +346,5 @@ impl SteamMessaging {
                 Ok((steam_id.raw(), message))
             })
             .collect()
-    }
-
-    pub fn close(&self, remote: u64) -> Result<(), SteamMessagingError> {
-        crate::steam::close_session_with_user(remote);
-        Ok(())
     }
 }

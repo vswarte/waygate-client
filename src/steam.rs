@@ -210,12 +210,16 @@ extern "C" fn close_p2p_channel_with_user_hook(
     tracing::info!(
         "ISteamNetworking::CloseP2PChannelWithUser. remote = {remote}. channel = {channel}."
     );
+
+    // Close the session with the user.
+    close_session_with_user(remote);
+
     if let Err(e) = CLOSE_P2P_CHANNEL
         .get()
         .expect("CLOSE_P2P_CHANNEL not initialized")
         .send(remote)
     {
-        tracing::error!("Could not send disconnect details down close channel. {e}");
+        tracing::error!("Could not send disconnect details down close channel: {e}");
     }
     true
 }
