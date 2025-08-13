@@ -218,8 +218,9 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
             while let Ok(remote) = close_rx.try_recv() {
                 tracing::info!("Dropping session with {remote}");
                 connections.remove(&remote);
+                game_packet_queue.remove(remote);
                 if let Err(e) = messaging.close(remote) {
-                    tracing::error!("Could not close steam messaging session with {remote}");
+                    tracing::error!("Could not close steam messaging session with {remote}: {e}");
                 }
             }
 
