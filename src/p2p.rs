@@ -104,7 +104,7 @@ const P2P_PACKET_SEND_PATTERN: &[Atom] =
 /// Determines the steam messages channel used for the p2p swap.
 const MESSAGES_CHANNEL: i32 = 69420;
 /// The max batch read size for a given player session per frame.
-const PACKET_BATCH_SIZE: usize = 0x10;
+const PACKET_BATCH_SIZE: usize = 0x400;
 /// How many packets do we expect in the queue on average for any distinct packet type?
 const PACKET_QUEUE_INITIAL_CAPACITY: usize = 255;
 
