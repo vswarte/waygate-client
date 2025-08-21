@@ -1,5 +1,6 @@
 use std::mem;
 use std::ptr;
+use std::ptr::copy_nonoverlapping;
 
 use crate::eac;
 
@@ -75,7 +76,7 @@ pub unsafe fn set_productuserid_to_string_hook(
                 let user_id = "Cock";
                 let user_id_length = user_id.len();
                 let user_id_ptr = user_id.as_ptr();
-                ptr::copy_nonoverlapping(user_id_ptr, char_buffer as *mut u8, user_id_length);
+                copy_nonoverlapping(user_id_ptr, char_buffer as *mut u8, user_id_length);
 
                 *(char_buffer_length as *mut u32) = user_id_length as u32;
 

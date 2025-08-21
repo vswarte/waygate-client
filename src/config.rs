@@ -1,16 +1,19 @@
+#[cfg(not(feature = "lib"))]
 use std::fs;
+#[cfg(not(feature = "lib"))]
 use std::path;
 use serde::Deserialize;
 
 use base64::prelude::*;
 
+#[cfg(not(feature = "lib"))]
 const CONFIG_FILE: &str = "./waygate.toml";
 
-#[derive(Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub host: String,
     pub port: u16,
-    pub verify_certificate: bool,
+    pub enable_ssl: bool,
     pub client_secret_key: String,
     pub server_public_key: String,
 }
@@ -18,12 +21,12 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            host: "212.227.51.78".to_string(),
+            host: "127.0.0.1".to_string(),
             #[cfg(feature="eldenring")]
             port: 10901,
             #[cfg(feature="armoredcore6")]
             port: 10902,
-            verify_certificate: false,
+            enable_ssl: false,
             client_secret_key: "j+7K1pfsAE1W82FCRyJbs65BHInOQ+xN9qog0sjDpTM=".to_string(),
             server_public_key: "KUdoBOUIdx1mmn9oOpFggrGUgTb3ljoO3l+R4tyYpUo=".to_string(),
         }
@@ -40,6 +43,7 @@ impl Config {
     }
 }
 
+#[cfg(not(feature = "lib"))]
 pub(crate) fn read_config_file() -> Option<Config> {
     path::absolute(path::PathBuf::from(CONFIG_FILE))
         .map(|p| fs::read_to_string(p).ok()).ok()

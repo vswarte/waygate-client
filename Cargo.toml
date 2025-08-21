@@ -30,6 +30,11 @@ base64 = "0.22"
 pelite = "0.10"
 bincode = "1"
 vtable-rs = "0.1"
+aes = "0.8"
+crc = "3"
+byteorder = "1.5"
+ctr = "0.9"
+dashmap = "6.1"
 
 [dependencies.serde]
 version = "1.0"
@@ -44,7 +49,7 @@ features = [
 ]
 
 [dependencies.windows]
-version = "0.48.0"
+version = "0.61.1"
 features = [
     "Win32_Foundation",
     "Win32_Networking_WinHttp",
@@ -59,5 +64,4 @@ libudis86-sys = { git = 'https://github.com/vars1ty/libudis86-sys.git' }
 default = ["eldenring"]
 eldenring = []
 armoredcore6 = []
-p2p = []
 lib = []

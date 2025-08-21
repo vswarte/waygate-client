@@ -3,6 +3,7 @@ use pelite::pe::Pe;
 use pelite::pe::PeView;
 use pelite::pe::Rva;
 use std::collections;
+use std::mem::transmute;
 use std::sync;
 use thiserror::Error;
 use windows::core::PCSTR;
@@ -121,7 +122,7 @@ pub fn build_singleton_table(program: &PeView) -> Result<SingletonMap, Singleton
 
         let metadata = program.rva_to_va(metadata_rva).unwrap();
         let get_singleton_name: extern "C" fn(u64) -> *const i8 =
-            unsafe { std::mem::transmute(program.rva_to_va(get_reflection_name_rva).unwrap()) };
+            unsafe { transmute(program.rva_to_va(get_reflection_name_rva).unwrap()) };
 
         let cstr = unsafe { std::ffi::CStr::from_ptr(get_singleton_name(metadata)) };
         let singleton_name = cstr

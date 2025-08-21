@@ -1,7 +1,7 @@
 use std::ffi::CString;
 
 use windows::core::PCSTR;
-use windows::w;
+use windows::core::w;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_FLAGS};
 
@@ -63,7 +63,7 @@ static_detour! {
     static HOOK_EOS_SHUTDOWN: fn() -> eos::EOS_EResult;
 }
 
-pub unsafe fn set_hooks() {
+pub unsafe fn hook() {
     load_eos_dll();
 
     hook::set_result_success_hook("EOS_Initialize", &HOOK_EOS_INITIALIZE);
@@ -176,7 +176,7 @@ pub unsafe fn set_hooks() {
 unsafe fn load_eos_dll() {
     LoadLibraryExW(
         w!("eossdk-win64-shipping.dll"),
-        HANDLE::default(),
+        Some(HANDLE::default()),
         LOAD_LIBRARY_FLAGS(0x00000001),
     )
     .expect("Could not load EOS SDK DLL");
