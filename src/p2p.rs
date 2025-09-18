@@ -44,8 +44,10 @@ pub(crate) mod message;
 pub enum Error {
     #[error("Io {0}")]
     Io(#[from] std::io::Error),
+    #[allow(dead_code, clippy::upper_case_acronyms)]
     #[error("Checksummed data does not match expected CRC")]
     CRC,
+    #[allow(dead_code)]
     #[error("Packet buffer size was different than advertised")]
     PacketSizeIncorrect,
     #[error("Did not read expected magic for handshake")]

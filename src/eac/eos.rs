@@ -47,7 +47,7 @@ pub type EOS_AntiCheatClient_OnPeerAuthStatusChangedCallback = unsafe extern "C"
  */
 #[repr(u32)]
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code, clippy::enum_variant_names)]
 pub enum EOS_EAntiCheatCommonClientType {
     /** An ordinary player that requires anti-cheat client protection to play */
     EOS_ACCCT_ProtectedClient = 0,
@@ -59,7 +59,7 @@ pub enum EOS_EAntiCheatCommonClientType {
 
 #[repr(u32)]
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code, clippy::enum_variant_names)]
 pub enum EOS_EAntiCheatCommonClientAuthStatus {
     EOS_ACCCAS_Invalid = 0,
     EOS_ACCCAS_LocalAuthComplete = 1,
@@ -604,7 +604,7 @@ pub enum EOS_EResult {
     EOS_UnexpectedError = 0x7FFFFFFF,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::enum_variant_names)]
 pub(crate) enum EOS_ELoginStatus {
     EOS_LS_NotLoggedIn = 0,
     EOS_LS_UsingLocalProfile = 1,

@@ -125,7 +125,8 @@ pub unsafe fn hook(
         0x100,
         PAGE_EXECUTE_READWRITE,
         &mut protect as _,
-    );
+    )
+    .expect("Could not change memory protection for vmt hook");
     networking_vmt.send_p2p_packet = send_p2p_packet_hook;
     networking_vmt.read_p2p_packet = read_p2p_packet_hook;
     networking_vmt.accept_p2p_session_with_user = accept_p2p_session_with_user_hook;
@@ -135,7 +136,8 @@ pub unsafe fn hook(
         0x100,
         protect,
         std::ptr::null_mut(),
-    );
+    )
+    .expect("Could not restore memory protection for vmt");
 }
 
 static READ_P2P_CHANNEL: OnceLock<Receiver<(u64, Vec<u8>)>> = OnceLock::new();
@@ -148,7 +150,7 @@ extern "C" fn send_p2p_packet_hook(
     data: *const u8,
     data_size: u32,
     _send_type: i32,
-    channel: i32,
+    _channel: i32,
 ) -> bool {
     let size = data_size as usize;
     let data = unsafe { std::slice::from_raw_parts(data, size) };
@@ -211,8 +213,9 @@ extern "C" fn close_p2p_channel_with_user_hook(
     if let Err(e) = CLOSE_P2P_CHANNEL
         .get()
         .expect("CLOSE_P2P_CHANNEL not initialized")
-        .send(remote) {
-        tracing::error!("Could not send disconnect details down close channel");
+        .send(remote)
+    {
+        tracing::error!("Could not send disconnect details down close channel. {e}");
     }
     true
 }

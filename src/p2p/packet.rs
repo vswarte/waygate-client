@@ -41,7 +41,7 @@ impl Packet {
     }
 
     /// High-level representation of the packets contents.
-    pub fn content(&self) -> Result<PacketContent, Error> {
+    pub fn content(&'_ self) -> Result<PacketContent<'_>, Error> {
         let mut reader = self.body.as_slice();
 
         // Nonce exchange packets are exempt from the rest of the protocol.

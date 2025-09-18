@@ -9,19 +9,16 @@ mod system;
 mod task;
 mod winhttp;
 
-use std::thread::sleep;
 use std::{sync::Arc, thread::spawn, time::Duration};
 
 pub use config::Config;
 use pelite::pe::PeView;
-use singleton::get_instance;
 use steamworks::Client;
 use steamworks_sys::{
     SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser,
     SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamNetworkingMessagesSessionRequest_t,
 };
 use system::wait_for_system_init;
-use task::CSTaskImp;
 use thiserror::Error;
 use tracing_panic::panic_hook;
 use windows::core::PCSTR;
@@ -33,6 +30,9 @@ const APP_ID: u32 = 1245620;
 const APP_ID: u32 = 1888160;
 
 /// Init for hooks and the like such that others can embed the client as a library.
+/// # Safety
+///
+/// Safe to call as long as it is only called once.
 pub unsafe fn init(config: Config) {
     let config = Arc::new(config);
     tracing::debug!("Initing {config:#?}");
@@ -63,7 +63,6 @@ pub unsafe fn init(config: Config) {
         steam::register_callback(1251, |request: &SteamNetworkingMessagesSessionRequest_t| {
             tracing::info!("SteamNetworkingMessagesSessionRequest.");
 
-            let remote = unsafe { request.m_identityRemote.__bindgen_anon_1.m_steamID64 };
             if !SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser(
                 SteamAPI_SteamNetworkingMessages_SteamAPI_v002(),
                 &request.m_identityRemote,
@@ -80,6 +79,9 @@ pub unsafe fn init(config: Config) {
 
 #[no_mangle]
 #[cfg(not(feature = "lib"))]
+/// # Safety
+///
+/// Safe to be called by LoadLibrary
 pub unsafe extern "C" fn DllMain(_hmodule: usize, reason: u32) -> bool {
     if reason == 1 {
         std::panic::set_hook(Box::new(panic_hook));

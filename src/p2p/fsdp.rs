@@ -1,17 +1,11 @@
 /// This code
-use std::{
-    cmp::{max, min},
-    io::Read,
-};
+use std::io::Read;
 
-use aes::{
-    cipher::{KeyIvInit, StreamCipher},
-    Aes128,
-};
-use byteorder::{ReadBytesExt, BE, LE};
+use byteorder::{ReadBytesExt, BE};
 
 use super::Error;
 
+#[allow(dead_code)]
 pub struct FsdpPayload {
     pub sequence: u16,
     pub last_received_remote_sequence: Option<u16>,
@@ -44,7 +38,7 @@ impl FsdpPayload {
         })
     }
 
-    pub fn content(&self) -> Result<FsdpPayloadContent, Error> {
+    pub fn content(&'_ self) -> Result<FsdpPayloadContent<'_>, Error> {
         Ok(match self.payload_type {
             0x0 => FsdpPayloadContent::Empty,
             0x1 => FsdpPayloadContent::Handshake(Handshake::read(self.body.as_slice())?),
@@ -67,6 +61,7 @@ pub enum FsdpPayloadContent<'a> {
 
 #[repr(u8)]
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum FsdpPayloadType {
     Empty = 0x0,
     Handshake = 0x1,
@@ -93,6 +88,7 @@ impl From<u8> for FsdpPayloadType {
 
 #[derive(Debug)]
 pub struct Handshake {
+    #[allow(dead_code)]
     pub receive_buffer_size: u32,
     pub steam_id: u64,
 }

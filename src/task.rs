@@ -1,12 +1,12 @@
-use std::sync::Arc;
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::singleton::DLRFLocatable;
-use pelite::pe::{Pe, PeView};
 use pelite::pattern::Atom;
-use windows::{core::PCSTR, Win32::System::LibraryLoader::GetModuleHandleA};
+use pelite::pe::{Pe, PeView};
 use std::sync::LazyLock;
+use windows::{core::PCSTR, Win32::System::LibraryLoader::GetModuleHandleA};
 
 pub trait TaskRuntime {
     fn run_task<T: Into<FD4Task>>(&self, execute: T, group: CSTaskGroupIndex) -> TaskHandle;
@@ -15,7 +15,7 @@ pub trait TaskRuntime {
 const REGISTER_TASK_PATTERN: &[Atom] =
     pelite::pattern!("e8 ? ? ? ? 48 8b 0d ? ? ? ? 4c 8b c7 8b d3 e8 $ { ' }");
 
-const REGISTER_TASK_VA: LazyLock<u64> = LazyLock::new(|| {
+static REGISTER_TASK_VA: LazyLock<u64> = LazyLock::new(|| {
     let module = unsafe {
         let handle = GetModuleHandleA(PCSTR(std::ptr::null())).unwrap().0 as *const u8;
         PeView::module(handle)
@@ -210,6 +210,7 @@ pub enum CSTaskGroupIndex {
     RmiMan,
     ResMan,
     SfxDebugger,
+    #[allow(clippy::upper_case_acronyms)]
     REMOTEMAN,
     Geom_WaitActivateFade,
     Geom_UpdateDraw,
