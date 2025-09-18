@@ -135,11 +135,18 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
             .map_err(InitError::AddressConversion)?
     };
 
+    type PacketDequeueFn = extern "C" fn(
+        NonNull<MTInternalThreadSteamConnection>,
+        u8,
+        NonNull<u8>,
+        u32,
+        NonNull<u8>,
+    ) -> u32;
     unsafe {
         let queue = game_packet_queue.clone();
         P2P_PACKET_DEQUEUE
             .initialize(
-                std::mem::transmute(packet_dequeue_va),
+                std::mem::transmute::<u64, PacketDequeueFn>(packet_dequeue_va),
                 move |connection: NonNull<MTInternalThreadSteamConnection>,
                       packet_type: u8,
                       output: NonNull<u8>,
@@ -167,12 +174,15 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
             .enable()?;
     }
 
+    type PacketSendFn =
+        extern "C" fn(usize, usize, NonNull<u64>, u8, NonNull<u8>, u32, u8) -> usize;
+
     unsafe {
         let messaging = messaging.clone();
 
         P2P_PACKET_SEND
             .initialize(
-                std::mem::transmute(packet_send_va),
+                std::mem::transmute::<u64, PacketSendFn>(packet_send_va),
                 move |_p1: usize,
                       _p2: usize,
                       steam_id: NonNull<u64>,
@@ -319,6 +329,7 @@ impl SteamMessaging {
         Ok(())
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn receive(
         &self,
     ) -> Vec<Result<(u64, Result<Message, SteamMessagingError>), SteamMessagingError>> {

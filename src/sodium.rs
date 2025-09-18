@@ -33,7 +33,7 @@ pub fn hook(module: &PeView, config: Arc<Config>) -> Result<(), InitError> {
         let config = config.clone();
         SODIUM_KX_KEY_DERIVE
             .initialize(
-                transmute(sodium_kx_derive_va),
+                transmute::<u64, fn(usize, *mut u8, *mut u8) -> usize>(sodium_kx_derive_va),
                 move |output: usize, public_key: *mut u8, secret_key: *mut u8| {
                     tracing::debug!("Swapping sodium keys");
                     let server_public_key = config.server_public_key();

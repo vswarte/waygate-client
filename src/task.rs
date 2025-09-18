@@ -38,7 +38,7 @@ impl TaskRuntime for CSTaskImp {
     fn run_task<T: Into<FD4Task>>(&self, task: T, group: CSTaskGroupIndex) -> TaskHandle {
         let register_task: extern "C" fn(&CSTaskImp, CSTaskGroupIndex, &FD4Task) =
             unsafe { std::mem::transmute(*REGISTER_TASK_VA) };
-
+        #[allow(clippy::arc_with_non_send_sync)]
         let task: Arc<FD4Task> = Arc::new(task.into());
         // SAFETY: we hold a unique reference to the contents of `arc`
         unsafe {
