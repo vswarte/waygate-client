@@ -3,11 +3,10 @@ use crossbeam_channel::{Receiver, Sender};
 use retour::static_detour;
 use std::{ffi::c_void, ptr::copy_nonoverlapping, sync::OnceLock};
 use steamworks_sys::{
-    EFriendRelationship, ESteamNetworkingIdentityType, P2PSessionState_t, SNetListenSocket_t,
-    SNetSocket_t, SteamAPI_ISteamFriends_GetFriendRelationship,
+    ESteamNetworkingIdentityType, P2PSessionState_t, SNetListenSocket_t, SNetSocket_t,
     SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser,
     SteamAPI_ISteamNetworkingMessages_SendMessageToUser, SteamAPI_ISteamUser_GetAuthSessionTicket,
-    SteamAPI_ISteamUser_GetSteamID, SteamAPI_RegisterCallback, SteamAPI_SteamFriends_v017,
+    SteamAPI_ISteamUser_GetSteamID, SteamAPI_RegisterCallback,
     SteamAPI_SteamNetworkingIdentity_Clear, SteamAPI_SteamNetworkingIdentity_SetSteamID,
     SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamAPI_SteamNetworking_v006,
     SteamAPI_SteamUser_v021, SteamNetworkingIdentity, SteamNetworkingIdentity__bindgen_ty_2,
@@ -16,15 +15,6 @@ use vtable_rs::{vtable, VPtr};
 use windows::Win32::System::Memory::{
     VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS,
 };
-
-/// Returns true if the steam ID is on the local users block list.
-pub fn is_blocked(steam_id: u64) -> bool {
-    let friends = unsafe { SteamAPI_SteamFriends_v017() };
-    let relationship = unsafe { SteamAPI_ISteamFriends_GetFriendRelationship(friends, steam_id) };
-
-    relationship == EFriendRelationship::k_EFriendRelationshipIgnored
-        || relationship == EFriendRelationship::k_EFriendRelationshipIgnoredFriend
-}
 
 /// Retrieve an auth session ticket for the local user.
 pub fn get_auth_ticket() -> (u64, Vec<u8>) {

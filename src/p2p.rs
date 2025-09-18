@@ -230,11 +230,6 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
                     continue;
                 };
 
-                if crate::steam::is_blocked(remote) {
-                    tracing::debug!("Dropping message from blocked remote {remote}");
-                    continue;
-                }
-
                 let Ok(message) = message else {
                     tracing::error!("Could not deserialize incoming waygate p2p message.");
                     continue;
