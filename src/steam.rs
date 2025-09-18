@@ -1,14 +1,7 @@
-use std::{
-    ffi::c_void,
-    ptr::copy_nonoverlapping,
-    sync::{
-        mpsc::{Receiver, Sender},
-        Mutex, OnceLock,
-    },
-};
-
 use crate::p2p::message::Message;
+use crossbeam_channel::{Receiver, Sender};
 use retour::static_detour;
+use std::{ffi::c_void, ptr::copy_nonoverlapping, sync::OnceLock};
 use steamworks_sys::{
     EFriendRelationship, ESteamNetworkingIdentityType, P2PSessionState_t, SNetListenSocket_t,
     SNetSocket_t, SteamAPI_ISteamFriends_GetFriendRelationship,
@@ -120,7 +113,7 @@ pub unsafe fn hook(
     close_tx: Sender<u64>,
 ) {
     SEND_P2P_CHANNEL.set(send_tx).unwrap();
-    READ_P2P_CHANNEL.set(Mutex::new(receive_rx)).unwrap();
+    READ_P2P_CHANNEL.set(receive_rx).unwrap();
     CLOSE_P2P_CHANNEL.set(close_tx).unwrap();
 
     let networking = SteamAPI_SteamNetworking_v006() as *mut SteamNetworking006;
@@ -145,7 +138,7 @@ pub unsafe fn hook(
     );
 }
 
-static READ_P2P_CHANNEL: OnceLock<Mutex<Receiver<(u64, Vec<u8>)>>> = OnceLock::new();
+static READ_P2P_CHANNEL: OnceLock<Receiver<(u64, Vec<u8>)>> = OnceLock::new();
 static SEND_P2P_CHANNEL: OnceLock<Sender<(u64, Message)>> = OnceLock::new();
 static CLOSE_P2P_CHANNEL: OnceLock<Sender<u64>> = OnceLock::new();
 
@@ -177,7 +170,7 @@ extern "C" fn read_p2p_packet_hook(
     remote_out: *mut u64,
     _channel: i32,
 ) -> bool {
-    let Ok((remote, data)) = READ_P2P_CHANNEL.get().unwrap().lock().unwrap().try_recv() else {
+    let Ok((remote, data)) = READ_P2P_CHANNEL.get().unwrap().try_recv() else {
         return false;
     };
 

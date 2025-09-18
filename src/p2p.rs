@@ -16,31 +16,21 @@
 /// instead. It wont conflict with other mods and it prevents you from having to intercept your own
 /// networking such that the game doesn't try to handle it by accident.
 use connection::{Origin, PlayerConnection};
+use crossbeam_channel::unbounded;
 use queue::GamePacketQueue;
 use retour::static_detour;
-use std::{
-    collections::HashMap,
-    ptr::NonNull,
-    sync::{mpsc::channel, Arc},
-};
+use std::{collections::HashMap, ptr::NonNull, sync::Arc};
 
 use message::Message;
 use pelite::pattern::Atom;
 use pelite::pe::{Pe, PeView};
-use serde::{Deserialize, Serialize};
 use steamworks::{Client, ClientManager};
 use steamworks_sys::k_nSteamNetworkingSend_AutoRestartBrokenSession;
-use steamworks_sys::{
-    SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser,
-    SteamAPI_ISteamNetworkingMessages_SendMessageToUser,
-    SteamAPI_SteamNetworkingMessages_SteamAPI_v002,
-};
 use thiserror::Error;
 
 use crate::singleton::get_instance;
-use crate::steam::{self, networking_identity};
 use crate::task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
-use crate::{InitError, APP_ID};
+use crate::InitError;
 
 mod connection;
 mod encryption;
@@ -111,9 +101,9 @@ const PACKET_QUEUE_INITIAL_CAPACITY: usize = 255;
 pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
     let messaging = Arc::new(SteamMessaging::new(steam));
     let game_packet_queue = Arc::new(GamePacketQueue::default());
-    let (p2p_send_tx, p2p_send_rx) = channel();
-    let (p2p_receive_tx, p2p_receive_rx) = channel();
-    let (close_tx, close_rx) = channel();
+    let (p2p_send_tx, p2p_send_rx) = unbounded();
+    let (p2p_receive_tx, p2p_receive_rx) = unbounded();
+    let (close_tx, close_rx) = unbounded();
 
     let packet_dequeue_va = {
         let mut matches = [0u32; 2];
@@ -208,7 +198,7 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
     }
 
     // Retool the session control packets to also use ISteamNetworkingMessages.
-    unsafe { steam::hook(p2p_send_tx, p2p_receive_rx, close_tx) };
+    unsafe { crate::steam::hook(p2p_send_tx, p2p_receive_rx, close_tx) };
     let mut connections = HashMap::<u64, PlayerConnection>::new();
 
     let cs_task = get_instance::<CSTaskImp>().unwrap().unwrap();
@@ -231,7 +221,7 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
                     continue;
                 };
 
-                if steam::is_blocked(remote) {
+                if crate::steam::is_blocked(remote) {
                     tracing::debug!("Dropping message from blocked remote {remote}");
                     continue;
                 }
@@ -317,7 +307,7 @@ impl SteamMessaging {
     pub fn send(&self, remote: u64, message: &Message) -> Result<(), SteamMessagingError> {
         let data = bincode::serialize(message)?;
 
-        steam::send_message_to_user(
+        crate::steam::send_message_to_user(
             remote,
             &data,
             message.send_flags() | k_nSteamNetworkingSend_AutoRestartBrokenSession,
@@ -349,7 +339,7 @@ impl SteamMessaging {
     }
 
     pub fn close(&self, remote: u64) -> Result<(), SteamMessagingError> {
-        steam::close_session_with_user(remote);
+        crate::steam::close_session_with_user(remote);
         Ok(())
     }
 }
