@@ -112,7 +112,7 @@ pub unsafe fn hook(
     let mut protect = PAGE_PROTECTION_FLAGS::default();
     VirtualProtect(
         networking_vmt as *const SteamNetworking006Vmt as _,
-        0x100,
+        std::mem::size_of::<SteamNetworking006Vmt>(),
         PAGE_EXECUTE_READWRITE,
         &mut protect as _,
     )
@@ -123,9 +123,9 @@ pub unsafe fn hook(
     networking_vmt.close_p2p_channel_with_user = close_p2p_channel_with_user_hook;
     VirtualProtect(
         networking_vmt as *const SteamNetworking006Vmt as _,
-        0x100,
+        std::mem::size_of::<SteamNetworking006Vmt>(),
         protect,
-        std::ptr::null_mut(),
+        &mut protect as _,
     )
     .expect("Could not restore memory protection for vmt");
 }
