@@ -20,6 +20,7 @@ use steamworks_sys::{
 };
 use system::wait_for_system_init;
 use thiserror::Error;
+#[cfg(not(feature = "lib"))]
 use tracing_panic::panic_hook;
 use windows::core::PCSTR;
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
