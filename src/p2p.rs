@@ -29,6 +29,7 @@ use steamworks_sys::k_nSteamNetworkingSend_AutoRestartBrokenSession;
 use thiserror::Error;
 
 use crate::singleton::get_instance;
+use crate::steam::close_session_with_user;
 use crate::task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
 use crate::InitError;
 
@@ -251,7 +252,10 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
                     // Send game packets appropriate channel for dequeueing by hook.
                     Message::GamePacket(packet_type, flags, data) => {
                         if !connection.ready() {
-                            tracing::warn!("Connection sent game packets before session setup was finalized. Skipping message.");
+                            tracing::warn!("Connection sent game packets before session setup was finalized. Closing session.");
+                            connections.remove(&remote);
+                            game_packet_queue.remove(remote);
+                            close_session_with_user(remote);
                             continue;
                         }
 
