@@ -214,7 +214,7 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
     unsafe { crate::steam::hook(p2p_send_tx, p2p_receive_rx, close_tx) };
     let mut connections = HashMap::<u64, PlayerConnection>::new();
 
-    let cs_task = get_instance::<CSTaskImp>().unwrap().unwrap();
+    let cs_task = unsafe { get_instance::<CSTaskImp>().expect("Could not get CSTaskImp") };
     let task = cs_task.run_task(
         move |_: &FD4TaskData| {
             // Process any pending session closes

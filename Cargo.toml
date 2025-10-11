@@ -36,6 +36,7 @@ byteorder = "1.5"
 ctr = "0.9"
 dashmap = "6.1"
 crossbeam-channel = "0.5.15"
+from-singleton = "2.0.1"
 
 [dependencies.serde]
 version = "1.0"

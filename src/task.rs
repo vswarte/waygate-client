@@ -2,7 +2,7 @@ use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::singleton::DLRFLocatable;
+use from_singleton::FromSingleton;
 use pelite::pattern::Atom;
 use pelite::pe::{Pe, PeView};
 use std::sync::LazyLock;
@@ -142,8 +142,10 @@ pub struct CSTaskImp {
     pub task_impl: usize,
 }
 
-impl DLRFLocatable for CSTaskImp {
-    const DLRF_NAME: &'static str = "CSTask";
+impl FromSingleton for CSTaskImp {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("CSTask")
+    }
 }
 
 #[repr(C)]
