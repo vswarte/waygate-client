@@ -2,28 +2,24 @@
 pub mod config;
 mod eac;
 mod p2p;
-mod singleton;
+mod rva;
 mod sodium;
 mod steam;
-mod system;
-mod task;
 mod winhttp;
 
 use std::{sync::Arc, thread::spawn, time::Duration};
 
 pub use config::Config;
-use pelite::pe::PeView;
+use eldenring_util::system::wait_for_system_init;
+use fromsoftware_shared::Program;
 use steamworks::Client;
 use steamworks_sys::{
     SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser,
     SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamNetworkingMessagesSessionRequest_t,
 };
-use system::wait_for_system_init;
 use thiserror::Error;
 #[cfg(not(feature = "lib"))]
 use tracing_panic::panic_hook;
-use windows::core::PCSTR;
-use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 
 #[cfg(feature = "eldenring")]
 const APP_ID: u32 = 1245620;
@@ -39,9 +35,7 @@ pub unsafe fn init(config: Config) {
     tracing::debug!("Initing {config:#?}");
 
     // Who the fuck are we
-    let module = unsafe {
-        PeView::module(GetModuleHandleA(PCSTR(std::ptr::null())).unwrap().0 as *const u8)
-    };
+    let program = Program::current();
 
     // Disable EAC but trick the game into thinking it is running so that we can connect to
     // a server.
@@ -52,13 +46,13 @@ pub unsafe fn init(config: Config) {
 
     // Hook sodium's kx key derive to swap the pre-shared keys that normally come from Data0's
     // other/network/ folder.
-    sodium::hook(&module, config.clone()).expect("Could not set up sodium hooks");
+    sodium::hook(&program, config.clone()).expect("Could not set up sodium hooks");
 
     // Spin up thread to wait for CSTaskImp to be initialized, then register a
     // task for our own message pump, such that it runs in lock-step with the
     // game's packet poll.
     spawn(move || {
-        wait_for_system_init(&module, Duration::MAX).unwrap();
+        wait_for_system_init(&program, Duration::MAX).unwrap();
 
         // Handle any message session requests.
         steam::register_callback(1251, |request: &SteamNetworkingMessagesSessionRequest_t| {
@@ -74,7 +68,7 @@ pub unsafe fn init(config: Config) {
 
         // Set up the p2p swap
         let (steam, _) = Client::init_app(APP_ID).expect("Could not initialize steam");
-        p2p::hook(&module, steam).expect("Could not set up p2p swap");
+        p2p::hook(&program, steam).expect("Could not set up p2p swap");
     });
 }
 

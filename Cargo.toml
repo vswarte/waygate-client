@@ -18,14 +18,10 @@ toml = "0.7.2"
 thiserror = "1"
 steamworks = "0.10"
 steamworks-sys = "0.10"
-crossbeam = "0.8"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-panic = "0.1"
 tracing-subscriber = "0.3"
-log = "0.4"
-simplelog = "0.12"
-log-panics = { version = "2", features = ["with-backtrace"] }
 base64 = "0.22"
 pelite = "0.10"
 bincode = "1"
@@ -52,14 +48,29 @@ features = [
 [dependencies.windows]
 version = "0.61.1"
 features = [
-    "Win32_Foundation",
-    "Win32_Networking_WinHttp",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
+    "Win32_Networking_WinHttp",
 ]
 
+[dependencies.fromsoftware-shared]
+version = "0.11"
+git = "https://github.com/vswarte/fromsoftware-rs"
+rev = "9d93a44e6785633456023ece3c83cebabe4151e4"
+
+[dependencies.eldenring-util]
+version = "0.11"
+git = "https://github.com/vswarte/fromsoftware-rs"
+rev = "9d93a44e6785633456023ece3c83cebabe4151e4"
+
+[dependencies.eldenring]
+version = "0.11"
+git = "https://github.com/vswarte/fromsoftware-rs"
+rev = "9d93a44e6785633456023ece3c83cebabe4151e4"
+
+
 [patch.crates-io]
-libudis86-sys = { git = 'https://github.com/vars1ty/libudis86-sys.git' }
+libudis86-sys = { git = "https://github.com/vars1ty/libudis86-sys.git" }
 
 [features]
 default = ["eldenring"]

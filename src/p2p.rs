@@ -17,21 +17,23 @@
 /// networking such that the game doesn't try to handle it by accident.
 use connection::{Origin, PlayerConnection};
 use crossbeam_channel::unbounded;
+use eldenring::{
+    cs::{CSTaskGroupIndex, CSTaskImp},
+    fd4::FD4TaskData,
+};
+use fromsoftware_shared::{get_instance, Program, SharedTaskImpExt};
 use queue::GamePacketQueue;
 use retour::static_detour;
 use std::{collections::HashMap, ptr::NonNull, sync::Arc};
 
 use message::Message;
-use pelite::pattern::Atom;
-use pelite::pe::{Pe, PeView};
+use pelite::pe::Pe;
 use steamworks::{Client, ClientManager};
 use steamworks_sys::k_nSteamNetworkingSend_AutoRestartBrokenSession;
 use thiserror::Error;
 
-use crate::singleton::get_instance;
-use crate::steam::close_session_with_user;
-use crate::task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
 use crate::InitError;
+use crate::{rva, steam};
 
 mod connection;
 mod encryption;
@@ -89,11 +91,6 @@ struct MTInternalThreadSteamConnection {
     steam_id: u64,
 }
 
-const P2P_PACKET_DEQUEUE_PATTERN: &[Atom] =
-    pelite::pattern!("48 8B 09 48 85 C9 75 03 33 C0 C3 E9 $ { ' }");
-const P2P_PACKET_SEND_PATTERN: &[Atom] =
-    pelite::pattern!("88 44 24 30 44 89 4C 24 28 44 0F B6 CA 48 8B D1 4C 89 44 24 20 49 8B CA 4C 8D 44 24 50 E8 $ { ' }");
-
 /// Determines the steam messages channel used for the p2p swap.
 const MESSAGES_CHANNEL: i32 = 69420;
 /// The max batch read size for a given player session per frame.
@@ -101,40 +98,20 @@ const PACKET_BATCH_SIZE: usize = 0x400;
 /// How many packets do we expect in the queue on average for any distinct packet type?
 const PACKET_QUEUE_INITIAL_CAPACITY: usize = 255;
 
-pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
+pub fn hook(program: &Program, steam: Client) -> Result<(), InitError> {
     let messaging = Arc::new(SteamMessaging::new(steam));
     let game_packet_queue = Arc::new(GamePacketQueue::default());
     let (p2p_send_tx, p2p_send_rx) = unbounded();
     let (p2p_receive_tx, p2p_receive_rx) = unbounded();
     let (close_tx, close_rx) = unbounded();
 
-    let packet_dequeue_va = {
-        let mut matches = [0u32; 2];
-        if !module
-            .scanner()
-            .finds_code(P2P_PACKET_DEQUEUE_PATTERN, &mut matches)
-        {
-            return Err(InitError::FlakyPattern("P2P_PACKET_DEQUEUE"));
-        }
+    let packet_dequeue_va = program
+        .rva_to_va(rva::get().p2p_packet_dequeue)
+        .map_err(InitError::AddressConversion)?;
 
-        module
-            .rva_to_va(matches[1])
-            .map_err(InitError::AddressConversion)?
-    };
-
-    let packet_send_va = {
-        let mut matches = [0u32; 2];
-        if !module
-            .scanner()
-            .finds_code(P2P_PACKET_SEND_PATTERN, &mut matches)
-        {
-            return Err(InitError::FlakyPattern("P2P_PACKET_SEND"));
-        }
-
-        module
-            .rva_to_va(matches[1])
-            .map_err(InitError::AddressConversion)?
-    };
+    let packet_send_va = program
+        .rva_to_va(rva::get().p2p_send_packet)
+        .map_err(InitError::AddressConversion)?;
 
     type PacketDequeueFn = extern "C" fn(
         NonNull<MTInternalThreadSteamConnection>,
@@ -214,8 +191,8 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
     unsafe { crate::steam::hook(p2p_send_tx, p2p_receive_rx, close_tx) };
     let mut connections = HashMap::<u64, PlayerConnection>::new();
 
-    let cs_task = get_instance::<CSTaskImp>().unwrap().unwrap();
-    let task = cs_task.run_task(
+    let cs_task = unsafe { get_instance::<CSTaskImp>().expect("Could not get CSTaskImp") };
+    let task = cs_task.run_recurring(
         move |_: &FD4TaskData| {
             // Process any pending session closes
             while let Ok(remote) = close_rx.try_recv() {
@@ -255,7 +232,7 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
                             tracing::warn!("Connection sent game packets before session setup was finalized. Closing session.");
                             connections.remove(&remote);
                             game_packet_queue.remove(remote);
-                            close_session_with_user(remote);
+                            steam::close_session_with_user(remote);
                             continue;
                         }
 
