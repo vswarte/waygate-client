@@ -3,17 +3,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use from_singleton::FromSingleton;
-use pelite::pattern::Atom;
 use pelite::pe::{Pe, PeView};
 use std::sync::LazyLock;
 use windows::{core::PCSTR, Win32::System::LibraryLoader::GetModuleHandleA};
 
+use crate::rva;
+
 pub trait TaskRuntime {
     fn run_task<T: Into<FD4Task>>(&self, execute: T, group: CSTaskGroupIndex) -> TaskHandle;
 }
-
-const REGISTER_TASK_PATTERN: &[Atom] =
-    pelite::pattern!("e8 ? ? ? ? 48 8b 0d ? ? ? ? 4c 8b c7 8b d3 e8 $ { ' }");
 
 static REGISTER_TASK_VA: LazyLock<u64> = LazyLock::new(|| {
     let module = unsafe {
@@ -21,17 +19,9 @@ static REGISTER_TASK_VA: LazyLock<u64> = LazyLock::new(|| {
         PeView::module(handle)
     };
 
-    let mut matches = [0u32; 2];
-    if !module
-        .scanner()
-        .finds_code(REGISTER_TASK_PATTERN, &mut matches)
-    {
-        panic!("Could not find REGISTER_TASK_PATTERN or found duplicates.");
-    }
-
     module
-        .rva_to_va(matches[1])
-        .expect("Call target for REGISTER_TASK_PATTERN was not in exe")
+        .rva_to_va(rva::get().register_task)
+        .expect("Could not get register task VA")
 });
 
 impl TaskRuntime for CSTaskImp {

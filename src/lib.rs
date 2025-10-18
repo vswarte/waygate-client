@@ -2,6 +2,7 @@
 pub mod config;
 mod eac;
 mod p2p;
+mod rva;
 mod singleton;
 mod sodium;
 mod steam;

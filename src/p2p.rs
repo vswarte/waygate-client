@@ -22,12 +22,12 @@ use retour::static_detour;
 use std::{collections::HashMap, ptr::NonNull, sync::Arc};
 
 use message::Message;
-use pelite::pattern::Atom;
 use pelite::pe::{Pe, PeView};
 use steamworks::{Client, ClientManager};
 use steamworks_sys::k_nSteamNetworkingSend_AutoRestartBrokenSession;
 use thiserror::Error;
 
+use crate::rva;
 use crate::singleton::get_instance;
 use crate::steam::close_session_with_user;
 use crate::task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
@@ -89,11 +89,6 @@ struct MTInternalThreadSteamConnection {
     steam_id: u64,
 }
 
-const P2P_PACKET_DEQUEUE_PATTERN: &[Atom] =
-    pelite::pattern!("48 8B 09 48 85 C9 75 03 33 C0 C3 E9 $ { ' }");
-const P2P_PACKET_SEND_PATTERN: &[Atom] =
-    pelite::pattern!("88 44 24 30 44 89 4C 24 28 44 0F B6 CA 48 8B D1 4C 89 44 24 20 49 8B CA 4C 8D 44 24 50 E8 $ { ' }");
-
 /// Determines the steam messages channel used for the p2p swap.
 const MESSAGES_CHANNEL: i32 = 69420;
 /// The max batch read size for a given player session per frame.
@@ -108,33 +103,13 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
     let (p2p_receive_tx, p2p_receive_rx) = unbounded();
     let (close_tx, close_rx) = unbounded();
 
-    let packet_dequeue_va = {
-        let mut matches = [0u32; 2];
-        if !module
-            .scanner()
-            .finds_code(P2P_PACKET_DEQUEUE_PATTERN, &mut matches)
-        {
-            return Err(InitError::FlakyPattern("P2P_PACKET_DEQUEUE"));
-        }
+    let packet_dequeue_va = module
+        .rva_to_va(rva::get().p2p_packet_dequeue)
+        .map_err(InitError::AddressConversion)?;
 
-        module
-            .rva_to_va(matches[1])
-            .map_err(InitError::AddressConversion)?
-    };
-
-    let packet_send_va = {
-        let mut matches = [0u32; 2];
-        if !module
-            .scanner()
-            .finds_code(P2P_PACKET_SEND_PATTERN, &mut matches)
-        {
-            return Err(InitError::FlakyPattern("P2P_PACKET_SEND"));
-        }
-
-        module
-            .rva_to_va(matches[1])
-            .map_err(InitError::AddressConversion)?
-    };
+    let packet_send_va = module
+        .rva_to_va(rva::get().p2p_send_packet)
+        .map_err(InitError::AddressConversion)?;
 
     type PacketDequeueFn = extern "C" fn(
         NonNull<MTInternalThreadSteamConnection>,
