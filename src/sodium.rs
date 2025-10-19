@@ -1,6 +1,7 @@
 use std::{mem::transmute, ptr::copy_nonoverlapping, sync::Arc};
 
-use pelite::pe::{Pe, PeView};
+use fromsoftware_shared::Program;
+use pelite::pe::Pe;
 use retour::static_detour;
 
 use crate::{rva, Config, InitError};
@@ -10,8 +11,8 @@ static_detour! {
 }
 
 /// Hooks libsodium's kx key derive so that we can swap out the preshared keys with our own.
-pub fn hook(module: &PeView, config: Arc<Config>) -> Result<(), InitError> {
-    let sodium_kx_derive_va = module
+pub fn hook(program: &Program, config: Arc<Config>) -> Result<(), InitError> {
+    let sodium_kx_derive_va = program
         .rva_to_va(rva::get().sodium_kx_key_derive)
         .map_err(InitError::AddressConversion)?;
 

@@ -17,21 +17,24 @@
 /// networking such that the game doesn't try to handle it by accident.
 use connection::{Origin, PlayerConnection};
 use crossbeam_channel::unbounded;
+use eldenring::{
+    cs::{CSTaskGroupIndex, CSTaskImp},
+    fd4::FD4TaskData,
+};
+use eldenring_util::task::CSTaskImpExt;
+use fromsoftware_shared::{get_instance, Program};
 use queue::GamePacketQueue;
 use retour::static_detour;
 use std::{collections::HashMap, ptr::NonNull, sync::Arc};
 
 use message::Message;
-use pelite::pe::{Pe, PeView};
+use pelite::pe::Pe;
 use steamworks::{Client, ClientManager};
 use steamworks_sys::k_nSteamNetworkingSend_AutoRestartBrokenSession;
 use thiserror::Error;
 
-use crate::rva;
-use crate::singleton::get_instance;
-use crate::steam::close_session_with_user;
-use crate::task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
 use crate::InitError;
+use crate::{rva, steam};
 
 mod connection;
 mod encryption;
@@ -96,18 +99,18 @@ const PACKET_BATCH_SIZE: usize = 0x400;
 /// How many packets do we expect in the queue on average for any distinct packet type?
 const PACKET_QUEUE_INITIAL_CAPACITY: usize = 255;
 
-pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
+pub fn hook(program: &Program, steam: Client) -> Result<(), InitError> {
     let messaging = Arc::new(SteamMessaging::new(steam));
     let game_packet_queue = Arc::new(GamePacketQueue::default());
     let (p2p_send_tx, p2p_send_rx) = unbounded();
     let (p2p_receive_tx, p2p_receive_rx) = unbounded();
     let (close_tx, close_rx) = unbounded();
 
-    let packet_dequeue_va = module
+    let packet_dequeue_va = program
         .rva_to_va(rva::get().p2p_packet_dequeue)
         .map_err(InitError::AddressConversion)?;
 
-    let packet_send_va = module
+    let packet_send_va = program
         .rva_to_va(rva::get().p2p_send_packet)
         .map_err(InitError::AddressConversion)?;
 
@@ -190,7 +193,7 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
     let mut connections = HashMap::<u64, PlayerConnection>::new();
 
     let cs_task = unsafe { get_instance::<CSTaskImp>().expect("Could not get CSTaskImp") };
-    let task = cs_task.run_task(
+    let task = cs_task.run_recurring(
         move |_: &FD4TaskData| {
             // Process any pending session closes
             while let Ok(remote) = close_rx.try_recv() {
@@ -230,7 +233,7 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
                             tracing::warn!("Connection sent game packets before session setup was finalized. Closing session.");
                             connections.remove(&remote);
                             game_packet_queue.remove(remote);
-                            close_session_with_user(remote);
+                            steam::close_session_with_user(remote);
                             continue;
                         }
 
