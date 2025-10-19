@@ -66,21 +66,17 @@ fn detect_version_and_get_rvas(module: &PeView) -> Option<RvaBundle> {
 }
 
 pub struct RvaBundle {
-    pub register_task: u32,
     pub p2p_packet_dequeue: u32,
     pub p2p_send_packet: u32,
     pub sodium_kx_key_derive: u32,
-    pub global_hinstance: u32,
 }
 
 macro_rules! rva_bundle {
     ($module:ident) => {
         Self {
-            register_task: $module::RVA_REGISTER_TASK,
             p2p_packet_dequeue: $module::RVA_P2P_PACKET_DEQUEUE,
             p2p_send_packet: $module::RVA_P2P_SEND_PACKET,
             sodium_kx_key_derive: $module::RVA_SODIUM_KX_KEY_DERIVE,
-            global_hinstance: $module::RVA_GLOBAL_HINSTANCE,
         }
     };
 }

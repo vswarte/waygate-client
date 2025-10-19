@@ -1,5 +1,3 @@
-pub const RVA_REGISTER_TASK: u32 = 0xeb2000;
 pub const RVA_P2P_PACKET_DEQUEUE: u32 = 0x203f6a0;
 pub const RVA_P2P_SEND_PACKET: u32 = 0x23f3ca0;
 pub const RVA_SODIUM_KX_KEY_DERIVE: u32 = 0x1e695d0;
-pub const RVA_GLOBAL_HINSTANCE: u32 = 0xc902c0;
