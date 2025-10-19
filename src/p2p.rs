@@ -86,6 +86,15 @@ static_detour! {
     ) -> usize;
 }
 
+fn wait_for_cstaskimp() -> &'static mut CSTaskImp {
+    loop {
+        if let Some(cs_task_imp) = unsafe { get_instance::<CSTaskImp>() } {
+            return cs_task_imp;
+        }
+        std::thread::yield_now();
+    }
+}
+
 #[repr(C)]
 struct MTInternalThreadSteamConnection {
     _unk0: [u8; 0x128],
@@ -192,7 +201,7 @@ pub fn hook(program: &Program, steam: Client) -> Result<(), InitError> {
     unsafe { crate::steam::hook(p2p_send_tx, p2p_receive_rx, close_tx) };
     let mut connections = HashMap::<u64, PlayerConnection>::new();
 
-    let cs_task = unsafe { get_instance::<CSTaskImp>().expect("Could not get CSTaskImp") };
+    let cs_task = wait_for_cstaskimp();
     let task = cs_task.run_recurring(
         move |_: &FD4TaskData| {
             // Process any pending session closes
