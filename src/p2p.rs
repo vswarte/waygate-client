@@ -21,8 +21,7 @@ use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp},
     fd4::FD4TaskData,
 };
-use eldenring_util::task::CSTaskImpExt;
-use fromsoftware_shared::{get_instance, Program};
+use fromsoftware_shared::{get_instance, Program, SharedTaskImpExt};
 use queue::GamePacketQueue;
 use retour::static_detour;
 use std::{collections::HashMap, ptr::NonNull, sync::Arc};

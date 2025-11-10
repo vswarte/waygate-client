@@ -56,22 +56,21 @@ features = [
 [dependencies.fromsoftware-shared]
 version = "0.11"
 git = "https://github.com/vswarte/fromsoftware-rs"
-rev = "7760c48ae6197fd2e6c88693cb1e63c687bacd80"
+rev = "9d93a44e6785633456023ece3c83cebabe4151e4"
 
 [dependencies.eldenring-util]
 version = "0.11"
 git = "https://github.com/vswarte/fromsoftware-rs"
-rev = "7760c48ae6197fd2e6c88693cb1e63c687bacd80"
+rev = "9d93a44e6785633456023ece3c83cebabe4151e4"
 
 [dependencies.eldenring]
 version = "0.11"
 git = "https://github.com/vswarte/fromsoftware-rs"
-rev = "7760c48ae6197fd2e6c88693cb1e63c687bacd80"
+rev = "9d93a44e6785633456023ece3c83cebabe4151e4"
 
 
 [patch.crates-io]
 libudis86-sys = { git = "https://github.com/vars1ty/libudis86-sys.git" }
-pelite = { git = "https://github.com/CasualX/pelite.git", rev = "e9d2dfa" }
 
 [features]
 default = ["eldenring"]
