@@ -10,7 +10,7 @@ mod winhttp;
 use std::{sync::Arc, thread::spawn, time::Duration};
 
 pub use config::Config;
-use eldenring_util::system::wait_for_system_init;
+use eldenring::util::system::wait_for_system_init;
 use fromsoftware_shared::Program;
 use steamworks::Client;
 use steamworks_sys::{

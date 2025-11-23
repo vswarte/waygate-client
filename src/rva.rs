@@ -3,14 +3,17 @@ use std::sync::LazyLock;
 use windows::core::PCSTR;
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 
+mod bundle;
 mod rva_jp;
 mod rva_ww;
+
+pub use bundle::RvaBundle;
 
 const LANG_ID_EN: u16 = 0x0009;
 const LANG_ID_JP: u16 = 0x0011;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GameVersion {
+enum GameVersion {
     Ww261,
     Jp2611,
 }
@@ -25,6 +28,9 @@ impl GameVersion {
     }
 }
 
+/// Returns the RVA bundle for the current executable region and version.
+///
+/// This will panic if the current executable isn't supported by this package.
 pub fn get() -> &'static RvaBundle {
     static RVAS: LazyLock<RvaBundle> = LazyLock::new(|| {
         let module = unsafe {
@@ -37,6 +43,8 @@ pub fn get() -> &'static RvaBundle {
     &RVAS
 }
 
+/// Determines the region and version of the current executable and, if it's
+/// known, returns the [RvaBundle] for it.
 fn detect_version_and_get_rvas(module: &PeView) -> Option<RvaBundle> {
     let resources = module.resources().ok()?;
     let info = resources.version_info().ok()?;
@@ -65,27 +73,11 @@ fn detect_version_and_get_rvas(module: &PeView) -> Option<RvaBundle> {
     Some(RvaBundle::for_version(version))
 }
 
-pub struct RvaBundle {
-    pub p2p_packet_dequeue: u32,
-    pub p2p_send_packet: u32,
-    pub sodium_kx_key_derive: u32,
-}
-
-macro_rules! rva_bundle {
-    ($module:ident) => {
-        Self {
-            p2p_packet_dequeue: $module::RVA_P2P_PACKET_DEQUEUE,
-            p2p_send_packet: $module::RVA_P2P_SEND_PACKET,
-            sodium_kx_key_derive: $module::RVA_SODIUM_KX_KEY_DERIVE,
-        }
-    };
-}
-
 impl RvaBundle {
     fn for_version(version: GameVersion) -> Self {
         match version {
-            GameVersion::Ww261 => rva_bundle!(rva_ww),
-            GameVersion::Jp2611 => rva_bundle!(rva_jp),
+            GameVersion::Ww261 => rva_ww::RVAS,
+            GameVersion::Jp2611 => rva_jp::RVAS,
         }
     }
 }

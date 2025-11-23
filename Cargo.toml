@@ -56,17 +56,12 @@ features = [
 [dependencies.fromsoftware-shared]
 version = "0.11"
 git = "https://github.com/vswarte/fromsoftware-rs"
-rev = "9d93a44e6785633456023ece3c83cebabe4151e4"
-
-[dependencies.eldenring-util]
-version = "0.11"
-git = "https://github.com/vswarte/fromsoftware-rs"
-rev = "9d93a44e6785633456023ece3c83cebabe4151e4"
+branch = "main"
 
 [dependencies.eldenring]
 version = "0.11"
 git = "https://github.com/vswarte/fromsoftware-rs"
-rev = "9d93a44e6785633456023ece3c83cebabe4151e4"
+branch = "main"
 
 
 [patch.crates-io]

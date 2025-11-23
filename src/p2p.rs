@@ -21,7 +21,7 @@ use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp},
     fd4::FD4TaskData,
 };
-use fromsoftware_shared::{get_instance, Program, SharedTaskImpExt};
+use fromsoftware_shared::{FromStatic, Program, SharedTaskImpExt};
 use queue::GamePacketQueue;
 use retour::static_detour;
 use std::{collections::HashMap, ptr::NonNull, sync::Arc};
@@ -87,7 +87,7 @@ static_detour! {
 
 fn wait_for_cstaskimp() -> &'static mut CSTaskImp {
     loop {
-        if let Some(cs_task_imp) = unsafe { get_instance::<CSTaskImp>() } {
+        if let Ok(cs_task_imp) = unsafe { CSTaskImp::instance() } {
             return cs_task_imp;
         }
         std::thread::yield_now();
