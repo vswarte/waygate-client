@@ -24,7 +24,7 @@ use eldenring::{
 use fromsoftware_shared::{FromStatic, Program, SharedTaskImpExt};
 use queue::GamePacketQueue;
 use retour::static_detour;
-use std::{collections::HashMap, ptr::NonNull, sync::Arc};
+use std::{collections::HashMap, ptr::NonNull, sync::Arc, time::Duration};
 
 use message::Message;
 use pelite::pe::Pe;
@@ -86,11 +86,19 @@ static_detour! {
 }
 
 fn wait_for_cstaskimp() -> &'static mut CSTaskImp {
+    let mut backoff = 0u32;
     loop {
         if let Ok(cs_task_imp) = unsafe { CSTaskImp::instance() } {
             return cs_task_imp;
         }
+
+        let shift = backoff.saturating_sub(6);
+        let millis = 1u64 << shift;
+        std::thread::sleep(Duration::from_millis(millis));
         std::thread::yield_now();
+        if backoff < 12 {
+            backoff += 1;
+        }
     }
 }
 
