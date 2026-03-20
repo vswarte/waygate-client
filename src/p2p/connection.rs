@@ -1,9 +1,4 @@
-use std::{
-    cmp::{max, min},
-    time::Instant,
-};
-
-use crate::p2p::fsdp::{FsdpPayload, FsdpPayloadType};
+use crate::p2p::fsdp::FsdpPayload;
 
 use super::{
     encryption::CryptoSession,
@@ -14,8 +9,6 @@ use super::{
 
 #[derive(Default)]
 pub struct PlayerConnection {
-    /// Has this session seen a disconnect message from either party?
-    disconnected: bool,
     crypto: CryptoSession,
     remote_handshake: Option<Handshake>,
 }
@@ -43,7 +36,7 @@ impl PlayerConnection {
         match packet.content()? {
             PacketContent::Nonce(nonce) => {
                 if data.len() != 14 {
-                    return Err(Error::ProtocolViolation("Nonce message of wrong size."))
+                    return Err(Error::ProtocolViolation("Nonce message of wrong size."));
                 }
 
                 tracing::info!("Nonce message: {nonce:x}");
@@ -75,6 +68,7 @@ impl PlayerConnection {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn log_content(payload: &FsdpPayload) -> Result<(), Error> {
         match payload.content()? {
             FsdpPayloadContent::Empty => tracing::info!("Empty"),

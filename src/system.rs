@@ -1,35 +1,15 @@
-/// OG comes from Dasaav
-/// https://github.com/Dasaav-dsv/libER/blob/main/source/dantelion2/system.cpp
-use std::sync;
-use std::sync::atomic::AtomicPtr;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
-use std::time::Instant;
+/// Util to await game startup.
+// OG comes from Dasaav
+// https://github.com/Dasaav-dsv/libER/blob/main/source/dantelion2/system.cpp
+use std::sync::atomic::{AtomicPtr, Ordering};
+use std::time::{Duration, Instant};
 
-use pelite::pattern;
-use pelite::pattern::Atom;
-use pelite::pe::Pe;
-use pelite::pe::PeView;
-use pelite::pe::Rva;
+use pelite::pe64::{Pe, PeView};
 use thiserror::Error;
-use windows::core::PCSTR;
-use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 
-// WinMain -> SetBaseAddr
-// used to set base executable address for CSWindowImp
-// and can be used to determine if the game has finished initializing
-const GLOBAL_INIT_BASE_ADDR_PATTERN: &[Atom] = pattern!(
-    "
-    48 8b ce
-    48 8b f8
-    e8 $ {
-        48 89 0d $ { ' }
-        c3
-    }
-    "
-);
+use crate::rva;
 
-static GLOBAL_INIT_BASE_ADDR: AtomicPtr<usize> = AtomicPtr::new(0x0 as _);
+static GLOBAL_HINSTANCE: AtomicPtr<usize> = AtomicPtr::new(0x0 as _);
 
 #[derive(Error, Debug)]
 pub enum SystemInitError {
@@ -39,24 +19,19 @@ pub enum SystemInitError {
     InvalidRva,
 }
 
-/// Wait for the system to finish initializing by await a base address to be populated for CSWindow. This happens after the CRT init.
+/// Wait for the system to finish initializing by waiting a global hInstance to be populated for CSWindow.
+/// This happens after the CRT init and after duplicate instance checks.
 pub fn wait_for_system_init(module: &PeView, timeout: Duration) -> Result<(), SystemInitError> {
-    let base_address = GLOBAL_INIT_BASE_ADDR.load(Ordering::Relaxed);
-    if unsafe { GLOBAL_INIT_BASE_ADDR.load(Ordering::Relaxed) } == 0x0 as _ {
-        let mut captures = [Rva::default(); 2];
-        module
-            .scanner()
-            .finds_code(GLOBAL_INIT_BASE_ADDR_PATTERN, &mut captures);
-
-        let global_init_base_address = module
-            .rva_to_va(captures[1])
+    if std::ptr::eq(GLOBAL_HINSTANCE.load(Ordering::Relaxed), 0x0 as _) {
+        let va = module
+            .rva_to_va(rva::get().global_hinstance)
             .map_err(|_| SystemInitError::InvalidRva)?;
 
-        GLOBAL_INIT_BASE_ADDR.store(global_init_base_address as _, Ordering::Relaxed);
+        GLOBAL_HINSTANCE.store(va as _, Ordering::Relaxed);
     }
 
     let start = Instant::now();
-    while unsafe { *GLOBAL_INIT_BASE_ADDR.load(Ordering::Relaxed) } == 0 {
+    while unsafe { *GLOBAL_HINSTANCE.load(Ordering::Relaxed) } == 0 {
         if start.elapsed() > timeout {
             return Err(SystemInitError::Timeout);
         }

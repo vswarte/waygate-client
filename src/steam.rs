@@ -1,20 +1,12 @@
-use std::{
-    ffi::c_void,
-    ptr::copy_nonoverlapping,
-    sync::{
-        mpsc::{Receiver, Sender},
-        Mutex, OnceLock,
-    },
-};
-
 use crate::p2p::message::Message;
+use crossbeam_channel::{Receiver, Sender};
 use retour::static_detour;
+use std::{ffi::c_void, ptr::copy_nonoverlapping, sync::OnceLock};
 use steamworks_sys::{
-    EFriendRelationship, ESteamNetworkingIdentityType, P2PSessionState_t, SNetListenSocket_t,
-    SNetSocket_t, SteamAPI_ISteamFriends_GetFriendRelationship,
+    ESteamNetworkingIdentityType, P2PSessionState_t, SNetListenSocket_t, SNetSocket_t,
     SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser,
     SteamAPI_ISteamNetworkingMessages_SendMessageToUser, SteamAPI_ISteamUser_GetAuthSessionTicket,
-    SteamAPI_ISteamUser_GetSteamID, SteamAPI_RegisterCallback, SteamAPI_SteamFriends_v017,
+    SteamAPI_ISteamUser_GetSteamID, SteamAPI_RegisterCallback,
     SteamAPI_SteamNetworkingIdentity_Clear, SteamAPI_SteamNetworkingIdentity_SetSteamID,
     SteamAPI_SteamNetworkingMessages_SteamAPI_v002, SteamAPI_SteamNetworking_v006,
     SteamAPI_SteamUser_v021, SteamNetworkingIdentity, SteamNetworkingIdentity__bindgen_ty_2,
@@ -23,15 +15,6 @@ use vtable_rs::{vtable, VPtr};
 use windows::Win32::System::Memory::{
     VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS,
 };
-
-/// Returns true if the steam ID is on the local users block list.
-pub fn is_blocked(steam_id: u64) -> bool {
-    let friends = unsafe { SteamAPI_SteamFriends_v017() };
-    let relationship = unsafe { SteamAPI_ISteamFriends_GetFriendRelationship(friends, steam_id) };
-
-    relationship == EFriendRelationship::k_EFriendRelationshipIgnored
-        || relationship == EFriendRelationship::k_EFriendRelationshipIgnoredFriend
-}
 
 /// Retrieve an auth session ticket for the local user.
 pub fn get_auth_ticket() -> (u64, Vec<u8>) {
@@ -120,7 +103,7 @@ pub unsafe fn hook(
     close_tx: Sender<u64>,
 ) {
     SEND_P2P_CHANNEL.set(send_tx).unwrap();
-    READ_P2P_CHANNEL.set(Mutex::new(receive_rx)).unwrap();
+    READ_P2P_CHANNEL.set(receive_rx).unwrap();
     CLOSE_P2P_CHANNEL.set(close_tx).unwrap();
 
     let networking = SteamAPI_SteamNetworking_v006() as *mut SteamNetworking006;
@@ -129,23 +112,25 @@ pub unsafe fn hook(
     let mut protect = PAGE_PROTECTION_FLAGS::default();
     VirtualProtect(
         networking_vmt as *const SteamNetworking006Vmt as _,
-        0x100,
+        std::mem::size_of::<SteamNetworking006Vmt>(),
         PAGE_EXECUTE_READWRITE,
         &mut protect as _,
-    );
+    )
+    .expect("Could not change memory protection for vmt hook");
     networking_vmt.send_p2p_packet = send_p2p_packet_hook;
     networking_vmt.read_p2p_packet = read_p2p_packet_hook;
     networking_vmt.accept_p2p_session_with_user = accept_p2p_session_with_user_hook;
     networking_vmt.close_p2p_channel_with_user = close_p2p_channel_with_user_hook;
     VirtualProtect(
         networking_vmt as *const SteamNetworking006Vmt as _,
-        0x100,
+        std::mem::size_of::<SteamNetworking006Vmt>(),
         protect,
-        std::ptr::null_mut(),
-    );
+        &mut protect as _,
+    )
+    .expect("Could not restore memory protection for vmt");
 }
 
-static READ_P2P_CHANNEL: OnceLock<Mutex<Receiver<(u64, Vec<u8>)>>> = OnceLock::new();
+static READ_P2P_CHANNEL: OnceLock<Receiver<(u64, Vec<u8>)>> = OnceLock::new();
 static SEND_P2P_CHANNEL: OnceLock<Sender<(u64, Message)>> = OnceLock::new();
 static CLOSE_P2P_CHANNEL: OnceLock<Sender<u64>> = OnceLock::new();
 
@@ -155,7 +140,7 @@ extern "C" fn send_p2p_packet_hook(
     data: *const u8,
     data_size: u32,
     _send_type: i32,
-    channel: i32,
+    _channel: i32,
 ) -> bool {
     let size = data_size as usize;
     let data = unsafe { std::slice::from_raw_parts(data, size) };
@@ -177,7 +162,7 @@ extern "C" fn read_p2p_packet_hook(
     remote_out: *mut u64,
     _channel: i32,
 ) -> bool {
-    let Ok((remote, data)) = READ_P2P_CHANNEL.get().unwrap().lock().unwrap().try_recv() else {
+    let Ok((remote, data)) = READ_P2P_CHANNEL.get().unwrap().try_recv() else {
         return false;
     };
 
@@ -215,11 +200,16 @@ extern "C" fn close_p2p_channel_with_user_hook(
     tracing::info!(
         "ISteamNetworking::CloseP2PChannelWithUser. remote = {remote}. channel = {channel}."
     );
+
+    // Close the session with the user.
+    close_session_with_user(remote);
+
     if let Err(e) = CLOSE_P2P_CHANNEL
         .get()
         .expect("CLOSE_P2P_CHANNEL not initialized")
-        .send(remote) {
-        tracing::error!("Could not send disconnect details down close channel");
+        .send(remote)
+    {
+        tracing::error!("Could not send disconnect details down close channel: {e}");
     }
     true
 }

@@ -16,31 +16,24 @@
 /// instead. It wont conflict with other mods and it prevents you from having to intercept your own
 /// networking such that the game doesn't try to handle it by accident.
 use connection::{Origin, PlayerConnection};
+use crossbeam_channel::unbounded;
+use eldenring::{
+    cs::{CSTaskGroupIndex, CSTaskImp},
+    fd4::FD4TaskData,
+};
+use fromsoftware_shared::{FromStatic, Program, SharedTaskImpExt};
 use queue::GamePacketQueue;
 use retour::static_detour;
-use std::{
-    collections::HashMap,
-    ptr::NonNull,
-    sync::{mpsc::channel, Arc},
-};
+use std::{collections::HashMap, ptr::NonNull, sync::Arc, time::Duration};
 
 use message::Message;
-use pelite::pattern::Atom;
-use pelite::pe::{Pe, PeView};
-use serde::{Deserialize, Serialize};
+use pelite::pe::Pe;
 use steamworks::{Client, ClientManager};
 use steamworks_sys::k_nSteamNetworkingSend_AutoRestartBrokenSession;
-use steamworks_sys::{
-    SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser,
-    SteamAPI_ISteamNetworkingMessages_SendMessageToUser,
-    SteamAPI_SteamNetworkingMessages_SteamAPI_v002,
-};
 use thiserror::Error;
 
-use crate::singleton::get_instance;
-use crate::steam::{self, networking_identity};
-use crate::task::{CSTaskGroupIndex, CSTaskImp, FD4TaskData, TaskRuntime};
-use crate::{InitError, APP_ID};
+use crate::InitError;
+use crate::{rva, steam};
 
 mod connection;
 mod encryption;
@@ -54,8 +47,10 @@ pub(crate) mod message;
 pub enum Error {
     #[error("Io {0}")]
     Io(#[from] std::io::Error),
+    #[allow(dead_code, clippy::upper_case_acronyms)]
     #[error("Checksummed data does not match expected CRC")]
     CRC,
+    #[allow(dead_code)]
     #[error("Packet buffer size was different than advertised")]
     PacketSizeIncorrect,
     #[error("Did not read expected magic for handshake")]
@@ -90,16 +85,28 @@ static_detour! {
     ) -> usize;
 }
 
+fn wait_for_cstaskimp() -> &'static mut CSTaskImp {
+    let mut backoff = 0u32;
+    loop {
+        if let Ok(cs_task_imp) = unsafe { CSTaskImp::instance() } {
+            return cs_task_imp;
+        }
+
+        let shift = backoff.saturating_sub(6);
+        let millis = 1u64 << shift;
+        std::thread::sleep(Duration::from_millis(millis));
+        std::thread::yield_now();
+        if backoff < 12 {
+            backoff += 1;
+        }
+    }
+}
+
 #[repr(C)]
 struct MTInternalThreadSteamConnection {
     _unk0: [u8; 0x128],
     steam_id: u64,
 }
-
-const P2P_PACKET_DEQUEUE_PATTERN: &[Atom] =
-    pelite::pattern!("48 8B 09 48 85 C9 75 03 33 C0 C3 E9 $ { ' }");
-const P2P_PACKET_SEND_PATTERN: &[Atom] =
-    pelite::pattern!("88 44 24 30 44 89 4C 24 28 44 0F B6 CA 48 8B D1 4C 89 44 24 20 49 8B CA 4C 8D 44 24 50 E8 $ { ' }");
 
 /// Determines the steam messages channel used for the p2p swap.
 const MESSAGES_CHANNEL: i32 = 69420;
@@ -108,46 +115,33 @@ const PACKET_BATCH_SIZE: usize = 0x400;
 /// How many packets do we expect in the queue on average for any distinct packet type?
 const PACKET_QUEUE_INITIAL_CAPACITY: usize = 255;
 
-pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
+pub fn hook(program: &Program, steam: Client) -> Result<(), InitError> {
     let messaging = Arc::new(SteamMessaging::new(steam));
     let game_packet_queue = Arc::new(GamePacketQueue::default());
-    let (p2p_send_tx, p2p_send_rx) = channel();
-    let (p2p_receive_tx, p2p_receive_rx) = channel();
-    let (close_tx, close_rx) = channel();
+    let (p2p_send_tx, p2p_send_rx) = unbounded();
+    let (p2p_receive_tx, p2p_receive_rx) = unbounded();
+    let (close_tx, close_rx) = unbounded();
 
-    let packet_dequeue_va = {
-        let mut matches = [0u32; 2];
-        if !module
-            .scanner()
-            .finds_code(P2P_PACKET_DEQUEUE_PATTERN, &mut matches)
-        {
-            return Err(InitError::FlakyPattern("P2P_PACKET_DEQUEUE"));
-        }
+    let packet_dequeue_va = program
+        .rva_to_va(rva::get().p2p_packet_dequeue)
+        .map_err(InitError::AddressConversion)?;
 
-        module
-            .rva_to_va(matches[1])
-            .map_err(InitError::AddressConversion)?
-    };
+    let packet_send_va = program
+        .rva_to_va(rva::get().p2p_send_packet)
+        .map_err(InitError::AddressConversion)?;
 
-    let packet_send_va = {
-        let mut matches = [0u32; 2];
-        if !module
-            .scanner()
-            .finds_code(P2P_PACKET_SEND_PATTERN, &mut matches)
-        {
-            return Err(InitError::FlakyPattern("P2P_PACKET_SEND"));
-        }
-
-        module
-            .rva_to_va(matches[1])
-            .map_err(InitError::AddressConversion)?
-    };
-
+    type PacketDequeueFn = extern "C" fn(
+        NonNull<MTInternalThreadSteamConnection>,
+        u8,
+        NonNull<u8>,
+        u32,
+        NonNull<u8>,
+    ) -> u32;
     unsafe {
         let queue = game_packet_queue.clone();
         P2P_PACKET_DEQUEUE
             .initialize(
-                std::mem::transmute(packet_dequeue_va),
+                std::mem::transmute::<u64, PacketDequeueFn>(packet_dequeue_va),
                 move |connection: NonNull<MTInternalThreadSteamConnection>,
                       packet_type: u8,
                       output: NonNull<u8>,
@@ -175,12 +169,15 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
             .enable()?;
     }
 
+    type PacketSendFn =
+        extern "C" fn(usize, usize, NonNull<u64>, u8, NonNull<u8>, u32, u8) -> usize;
+
     unsafe {
         let messaging = messaging.clone();
 
         P2P_PACKET_SEND
             .initialize(
-                std::mem::transmute(packet_send_va),
+                std::mem::transmute::<u64, PacketSendFn>(packet_send_va),
                 move |_p1: usize,
                       _p2: usize,
                       steam_id: NonNull<u64>,
@@ -208,20 +205,17 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
     }
 
     // Retool the session control packets to also use ISteamNetworkingMessages.
-    unsafe { steam::hook(p2p_send_tx, p2p_receive_rx, close_tx) };
+    unsafe { crate::steam::hook(p2p_send_tx, p2p_receive_rx, close_tx) };
     let mut connections = HashMap::<u64, PlayerConnection>::new();
 
-    let cs_task = get_instance::<CSTaskImp>().unwrap().unwrap();
-    let task = cs_task.run_task(
+    let cs_task = wait_for_cstaskimp();
+    let task = cs_task.run_recurring(
         move |_: &FD4TaskData| {
             // Process any pending session closes
             while let Ok(remote) = close_rx.try_recv() {
                 tracing::info!("Dropping session with {remote}");
                 connections.remove(&remote);
                 game_packet_queue.remove(remote);
-                if let Err(e) = messaging.close(remote) {
-                    tracing::error!("Could not close steam messaging session with {remote}: {e}");
-                }
             }
 
             // Process incoming messages from remote parties.
@@ -230,11 +224,6 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
                     tracing::error!("Could not figure out remote. e = {message:?}");
                     continue;
                 };
-
-                if steam::is_blocked(remote) {
-                    tracing::debug!("Dropping message from blocked remote {remote}");
-                    continue;
-                }
 
                 let Ok(message) = message else {
                     tracing::error!("Could not deserialize incoming waygate p2p message.");
@@ -257,7 +246,10 @@ pub fn hook(module: &PeView, steam: Client) -> Result<(), InitError> {
                     // Send game packets appropriate channel for dequeueing by hook.
                     Message::GamePacket(packet_type, flags, data) => {
                         if !connection.ready() {
-                            tracing::warn!("Connection sent game packets before session setup was finalized. Skipping message.");
+                            tracing::warn!("Connection sent game packets before session setup was finalized. Closing session.");
+                            connections.remove(&remote);
+                            game_packet_queue.remove(remote);
+                            steam::close_session_with_user(remote);
                             continue;
                         }
 
@@ -317,7 +309,7 @@ impl SteamMessaging {
     pub fn send(&self, remote: u64, message: &Message) -> Result<(), SteamMessagingError> {
         let data = bincode::serialize(message)?;
 
-        steam::send_message_to_user(
+        crate::steam::send_message_to_user(
             remote,
             &data,
             message.send_flags() | k_nSteamNetworkingSend_AutoRestartBrokenSession,
@@ -327,6 +319,7 @@ impl SteamMessaging {
         Ok(())
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn receive(
         &self,
     ) -> Vec<Result<(u64, Result<Message, SteamMessagingError>), SteamMessagingError>> {
@@ -346,10 +339,5 @@ impl SteamMessaging {
                 Ok((steam_id.raw(), message))
             })
             .collect()
-    }
-
-    pub fn close(&self, remote: u64) -> Result<(), SteamMessagingError> {
-        steam::close_session_with_user(remote);
-        Ok(())
     }
 }

@@ -1,14 +1,14 @@
 use std::mem;
-use std::ptr;
 use std::ptr::copy_nonoverlapping;
 
 use crate::eac;
 
 pub unsafe fn set_deadbeef_hook(symbol: &str, detour: &retour::StaticDetour<fn() -> usize>) {
     detour
-        .initialize(mem::transmute(eac::resolve_eos_symbol(symbol)), move || {
-            0xDEADBEEF
-        })
+        .initialize(
+            mem::transmute::<usize, fn() -> usize>(eac::resolve_eos_symbol(symbol)),
+            move || 0xDEADBEEF,
+        )
         .unwrap();
     detour.enable().unwrap();
 }
@@ -18,9 +18,10 @@ pub unsafe fn set_result_success_hook(
     detour: &retour::StaticDetour<fn() -> eac::eos::EOS_EResult>,
 ) {
     detour
-        .initialize(mem::transmute(eac::resolve_eos_symbol(symbol)), move || {
-            eac::eos::EOS_EResult::EOS_Success
-        })
+        .initialize(
+            mem::transmute::<usize, fn() -> eac::eos::EOS_EResult>(eac::resolve_eos_symbol(symbol)),
+            move || eac::eos::EOS_EResult::EOS_Success,
+        )
         .unwrap();
     detour.enable().unwrap();
 }
@@ -30,9 +31,10 @@ pub unsafe fn set_result_not_found_hook(
     detour: &retour::StaticDetour<fn() -> eac::eos::EOS_EResult>,
 ) {
     detour
-        .initialize(mem::transmute(eac::resolve_eos_symbol(symbol)), move || {
-            eac::eos::EOS_EResult::EOS_NotFound
-        })
+        .initialize(
+            mem::transmute::<usize, fn() -> eac::eos::EOS_EResult>(eac::resolve_eos_symbol(symbol)),
+            move || eac::eos::EOS_EResult::EOS_NotFound,
+        )
         .unwrap();
     detour.enable().unwrap();
 }
@@ -42,25 +44,30 @@ pub unsafe fn set_loginstatus_loggedin_hook(
     detour: &retour::StaticDetour<fn() -> usize>,
 ) {
     detour
-        .initialize(mem::transmute(eac::resolve_eos_symbol(symbol)), move || {
-            eac::eos::EOS_ELoginStatus::EOS_LS_LoggedIn as usize
-        })
+        .initialize(
+            mem::transmute::<usize, fn() -> usize>(eac::resolve_eos_symbol(symbol)),
+            move || eac::eos::EOS_ELoginStatus::EOS_LS_LoggedIn as usize,
+        )
         .unwrap();
     detour.enable().unwrap();
 }
 
 pub unsafe fn set_true_hook(symbol: &str, detour: &retour::StaticDetour<fn() -> bool>) {
     detour
-        .initialize(mem::transmute(eac::resolve_eos_symbol(symbol)), move || {
-            true
-        })
+        .initialize(
+            mem::transmute::<usize, fn() -> bool>(eac::resolve_eos_symbol(symbol)),
+            move || true,
+        )
         .unwrap();
     detour.enable().unwrap();
 }
 
 pub unsafe fn set_void_hook(symbol: &str, detour: &retour::StaticDetour<fn()>) {
     detour
-        .initialize(mem::transmute(eac::resolve_eos_symbol(symbol)), move || {})
+        .initialize(
+            mem::transmute::<usize, fn()>(eac::resolve_eos_symbol(symbol)),
+            move || {},
+        )
         .unwrap();
     detour.enable().unwrap();
 }
@@ -71,7 +78,9 @@ pub unsafe fn set_productuserid_to_string_hook(
 ) {
     detour
         .initialize(
-            mem::transmute(eac::resolve_eos_symbol(symbol)),
+            mem::transmute::<usize, fn(usize, usize, usize) -> eac::eos::EOS_EResult>(
+                eac::resolve_eos_symbol(symbol),
+            ),
             move |_: usize, char_buffer: usize, char_buffer_length: usize| {
                 let user_id = "Cock";
                 let user_id_length = user_id.len();
@@ -94,7 +103,9 @@ pub unsafe fn set_connect_login_hook(
 ) {
     detour
         .initialize(
-            mem::transmute(eac::resolve_eos_symbol(symbol)),
+            mem::transmute::<usize, fn(usize, usize, usize, usize)>(eac::resolve_eos_symbol(
+                symbol,
+            )),
             move |_connect: usize, _options: usize, client_data: usize, notification_fn: usize| {
                 let callback: eac::eos::EOS_Connect_OnLoginCallback =
                     mem::transmute(notification_fn);
@@ -118,7 +129,9 @@ pub unsafe fn set_report_player_behavior_hook(
 ) {
     detour
         .initialize(
-            mem::transmute(eac::resolve_eos_symbol(symbol)),
+            mem::transmute::<usize, fn(usize, usize, usize, usize)>(eac::resolve_eos_symbol(
+                symbol,
+            )),
             move |_handle: usize, _options: usize, _client_data: usize, _complete: usize| {
                 // Do fucking nothing lmao
             },

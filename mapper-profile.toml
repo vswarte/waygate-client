@@ -1,0 +1,11 @@
+[[patterns]]
+captures = ["", "p2p_packet_dequeue"]
+pattern = "48 8B 09 48 85 C9 75 03 33 C0 C3 E9 $ { ' }"
+
+[[patterns]]
+captures = ["", "p2p_send_packet"]
+pattern = "88 44 24 30 44 89 4C 24 28 44 0F B6 CA 48 8B D1 4C 89 44 24 20 49 8B CA 4C 8D 44 24 50 E8 $ { ' }"
+
+[[patterns]]
+captures = ["sodium_kx_key_derive"]
+pattern = "? 53 ? 83 EC 50 ? 8B 05 ? ? ? ? ? 33 C4 ? 89 44 ? ? ? 8B C0 ? 8B D9 ? 8B C2 ? 8D 4C ? 20 ? 8B D0"

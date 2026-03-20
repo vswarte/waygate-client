@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use steamworks_sys::{k_nSteamNetworkingSend_Reliable, k_nSteamNetworkingSend_ReliableNoNagle, k_nSteamNetworkingSend_UnreliableNoNagle};
+use steamworks_sys::{
+    k_nSteamNetworkingSend_Reliable, k_nSteamNetworkingSend_ReliableNoNagle,
+    k_nSteamNetworkingSend_UnreliableNoNagle,
+};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Message {
@@ -17,7 +20,7 @@ impl Message {
 
             // TODO: figure out more packet types and determine appropriate send flags.
             #[cfg(feature = "eldenring")]
-            Message::GamePacket(packet_type, flags, _) => match packet_type {
+            Message::GamePacket(packet_type, _flags, _) => match packet_type {
                 // Player pos updates
                 1 => k_nSteamNetworkingSend_UnreliableNoNagle,
                 // NPC pos updates
@@ -81,7 +84,7 @@ impl Message {
                 82 => k_nSteamNetworkingSend_Reliable,
                 // World area time sync
                 83 => k_nSteamNetworkingSend_Reliable,
-                // Request world area weather and time sync 
+                // Request world area weather and time sync
                 84 => k_nSteamNetworkingSend_Reliable,
                 // Multiplay start area ID
                 90 => k_nSteamNetworkingSend_Reliable,
@@ -89,7 +92,7 @@ impl Message {
                 96 => k_nSteamNetworkingSend_Reliable,
                 // Rebreakin (phantom bloody finger teleport)
                 101 => k_nSteamNetworkingSend_Reliable,
-                // Request EAC user info 
+                // Request EAC user info
                 105 => k_nSteamNetworkingSend_Reliable,
                 // EAC user info
                 106 => k_nSteamNetworkingSend_Reliable,

@@ -1,7 +1,13 @@
-use std::{cmp::{max, min}, io::Read};
+use std::{
+    cmp::{max, min},
+    io::Read,
+};
 
-use aes::{cipher::{KeyIvInit, StreamCipher}, Aes128};
-use byteorder::{BE, LE, ReadBytesExt};
+use aes::{
+    cipher::{KeyIvInit, StreamCipher},
+    Aes128,
+};
+use byteorder::{ReadBytesExt, BE, LE};
 use crc::{Crc, CRC_32_ISO_HDLC};
 use ctr::Ctr128BE;
 
@@ -18,20 +24,11 @@ pub const CTR_LOW_THIRD: u16 = 0x5554;
 pub const DECRYPT_BUFFER_SIZE: usize = 0x800;
 
 /// Handles the decryption of low-level game packets.
+#[derive(Default)]
 pub struct CryptoSession {
     nonce: Option<u64>,
     local: CryptoParty,
     remote: CryptoParty,
-}
-
-impl Default for CryptoSession {
-    fn default() -> Self {
-        Self {
-            nonce: Default::default(),
-            local: Default::default(),
-            remote: Default::default(),
-        }
-    }
 }
 
 impl CryptoSession {
@@ -62,18 +59,15 @@ impl CryptoSession {
         party.nonce_halve = Some(nonce);
 
         // Form final session nonce once both ends are in.
-        match (self.local.nonce_halve, self.remote.nonce_halve) {
-            (Some(local), Some(remote)) => {
-                // Final nonce is determined by ordering both nonce halves and shifting
-                // them to one.
-                let low = min(local, remote) as u64;
-                let high = max(local, remote) as u64;
-                let nonce = high << 32 | low;
+        if let (Some(local), Some(remote)) = (self.local.nonce_halve, self.remote.nonce_halve) {
+            // Final nonce is determined by ordering both nonce halves and shifting
+            // them to one.
+            let low = min(local, remote) as u64;
+            let high = max(local, remote) as u64;
+            let nonce = high << 32 | low;
 
-                tracing::info!("Derived session nonce {nonce:x}");
-                self.nonce = Some(nonce);
-            }
-            _ => {}
+            tracing::info!("Derived session nonce {nonce:x}");
+            self.nonce = Some(nonce);
         }
 
         Ok(())
@@ -81,14 +75,20 @@ impl CryptoSession {
 
     /// Decrypt a message using the sessions parameters.
     pub fn decrypt<R: Read>(&mut self, mut data: R, side: Origin) -> Result<Vec<u8>, Error> {
-        let Some(nonce) = self.nonce.clone() else {
-            return Err(Error::ProtocolViolation("Sending encrypted data before KX was finalized."));
+        let Some(nonce) = self.nonce else {
+            return Err(Error::ProtocolViolation(
+                "Sending encrypted data before KX was finalized.",
+            ));
         };
 
         let party = self.party_for_side(side);
         let sequence = data.read_u16::<BE>()?;
         let sequence = Self::wrap_packet_seq(sequence, party.sequence_latest)?;
-        tracing::debug!("Packet seq {sequence} (latest: {}, highest: {})", party.sequence_latest, party.sequence_highest);
+        tracing::debug!(
+            "Packet seq {sequence} (latest: {}, highest: {})",
+            party.sequence_latest,
+            party.sequence_highest
+        );
 
         let iv = Self::generate_iv(sequence, nonce);
         tracing::debug!("IV {iv:x?}");
@@ -118,7 +118,7 @@ impl CryptoSession {
 
     fn wrap_packet_seq(packet_seq: u16, latest_seq: u64) -> Result<u64, Error> {
         let local_low: u16 = (latest_seq & 0xFFFF) as u16;
-        let local_top: u64 = (latest_seq & !0xFFFF) as u64;
+        let local_top: u64 = latest_seq & !0xFFFF;
 
         let c = [local_low, packet_seq];
         if c.iter().any(|&n| CTR_LOW_THIRD < n)
@@ -129,10 +129,10 @@ impl CryptoSession {
             if local_low < CTR_TOP_THIRD || CTR_LOW_THIRD < packet_seq {
                 local_top
                     .checked_sub(0x10000)
-                    .and_then(|n| Some(n | packet_seq as u64))
-                    .ok_or_else(|| Error::PacketSequence)
+                    .map(|n| n | packet_seq as u64)
+                    .ok_or(Error::PacketSequence)
             } else {
-                Ok(local_top + 0x10000 | packet_seq as u64)
+                Ok((local_top + 0x10000) | packet_seq as u64)
             }
         } else {
             Ok(local_top | packet_seq as u64)
@@ -154,7 +154,7 @@ struct CryptoParty {
 }
 
 impl CryptoParty {
-    pub fn update_packet_counters(&mut self, sequence: u64) -> () {
+    pub fn update_packet_counters(&mut self, sequence: u64) {
         let mut dist = self.sequence_highest.wrapping_sub(sequence) as u32;
         if sequence >= self.sequence_highest {
             dist = (sequence - self.sequence_highest) as u32;
@@ -164,6 +164,7 @@ impl CryptoParty {
         self.sequence_latest = sequence;
     }
 
+    #[allow(dead_code)]
     pub fn late_or_duplicate_packet_check(&self, sequence: u64) -> Result<(), Error> {
         let window_end = self.sequence_highest;
         let bitmask = self.received;
